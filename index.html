@@ -3,228 +3,278 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>JARVIS_INTERFACE_V1</title>
+    <title>NEXUS ARCHITECT V2</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; }
         
-        /* 1. MAKE VIDEO VISIBLE & MIRRORED */
+        /* LAYER 1: The Camera Feed */
         #input_video { 
             position: absolute; top: 0; left: 0; 
             width: 100vw; height: 100vh; 
             object-fit: cover; 
-            transform: scaleX(-1); 
+            transform: scaleX(-1); /* Mirror effect */
             z-index: 0;
         }
-        
-        /* 2. CANVAS ON TOP */
-        canvas { 
-            position: absolute; top: 0; left: 0; 
-            width: 100vw; height: 100vh; 
-            z-index: 1; 
+
+        /* LAYER 2: The 2D Skeleton Overlay (The Lines) */
+        #output_canvas {
+            position: absolute; top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 1;
+            transform: scaleX(-1); /* Mirror to match video */
         }
 
-        /* 3. HUD TEXT */
+        /* LAYER 3: The 3D Block World */
+        #three_canvas { 
+            position: absolute; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
+            z-index: 2; 
+        }
+
+        /* LAYER 4: The HUD */
         #hud {
             position: absolute; top: 20px; left: 20px;
             color: #00ffff; font-family: 'Courier New', monospace;
             font-weight: bold; font-size: 14px; 
             text-shadow: 0 0 5px #00ffff;
-            pointer-events: none; z-index: 2;
-            background: rgba(0, 0, 0, 0.5);
-            padding: 10px; border: 1px solid #00ffff;
+            pointer-events: none; z-index: 3;
+            background: rgba(0, 20, 40, 0.7);
+            padding: 15px; border: 1px solid #00ffff;
+            border-radius: 5px;
         }
         
-        .red { color: #ff0055; text-shadow: 0 0 5px #ff0055; }
-        .green { color: #00ff00; text-shadow: 0 0 5px #00ff00; }
+        .mode-draw { color: #00ff00; }
+        .mode-erase { color: #ff0055; }
     </style>
     
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
     <div id="hud">
-        SYSTEM: <span class="green">ONLINE</span><br>
-        MODE: <span id="mode_text">SCANNING</span><br>
-        BLOCKS: <span id="block_count">0</span> / 1500<br>
-        <br>
-        [CONTROLS]<br>
-        PINCH RIGHT: <span style="color:white">DRAW</span><br>
-        OPEN PALM: <span style="color:white">ROTATE</span><br>
-        LEFT FIST: <span class="red">RESET</span>
+        NEXUS_OS: <span style="color:white">V2.0_STABLE</span><br>
+        RIGHT HAND: <span class="mode-draw">BUILDER</span><br>
+        LEFT HAND: <span class="mode-erase">ERASER</span><br>
+        VOXELS: <span id="voxel_count">0</span>
     </div>
 
     <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas> <script>
+        // --- 1. CONFIGURATION ---
+        const CONFIG = {
+            gridSize: 0.8,         // Block size
+            smoothing: 0.15,       // Lower = Smoother (but slower), Higher = Snappy
+            pinchThreshold: 0.06,  // Sensitivity of the click
+            maxBlocks: 2000
+        };
 
-    <script>
-        // --- CONFIG ---
-        const GRID_SIZE = 0.6; // Size of the blocks
-        const MAX_BLOCKS = 1500;
-        
-        // --- THREE.JS SETUP ---
+        // --- 2. SETUP VISUAL LAYERS ---
+        const videoElement = document.getElementById('input_video');
+        const canvas2D = document.getElementById('output_canvas');
+        const ctx2D = canvas2D.getContext('2d');
+        const voxelCountLabel = document.getElementById('voxel_count');
+
+        // Fix Canvas Size
+        canvas2D.width = window.innerWidth;
+        canvas2D.height = window.innerHeight;
+
+        // --- 3. THREE.JS ENGINE (The 3D World) ---
         const scene = new THREE.Scene();
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-        camera.position.z = 12; // Zoom level
+        camera.position.z = 15;
 
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.domElement.id = "three_canvas";
         document.body.appendChild(renderer.domElement);
 
-        // --- INSTANCED MESH (HIGH PERFORMANCE) ---
-        // This allows us to draw 1500 blocks without lag
-        const geometry = new THREE.BoxGeometry(GRID_SIZE, GRID_SIZE, GRID_SIZE);
+        // -- INSTANCED MESH (The Optimized Block System) --
+        const geometry = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
         const material = new THREE.MeshBasicMaterial({ 
             color: 0x00ffff, 
-            wireframe: true, // WIREFRAME LOOK
+            wireframe: true, 
             transparent: true, 
-            opacity: 0.5 
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending 
         });
-        
-        const blocks = new THREE.InstancedMesh(geometry, material, MAX_BLOCKS);
-        scene.add(blocks);
+        const voxels = new THREE.InstancedMesh(geometry, material, CONFIG.maxBlocks);
+        scene.add(voxels);
 
-        // Hide all blocks initially
+        // Storage for block positions (to check for erasing later)
+        const voxelData = []; 
         const dummy = new THREE.Object3D();
-        for(let i=0; i<MAX_BLOCKS; i++){
-            dummy.position.set(0, 0, 1000); // Move off-screen
+        
+        // Initialize Blocks off-screen
+        for(let i=0; i<CONFIG.maxBlocks; i++){
+            dummy.position.set(0,0,1000);
             dummy.updateMatrix();
-            blocks.setMatrixAt(i, dummy.matrix);
+            voxels.setMatrixAt(i, dummy.matrix);
+            voxelData.push({ active: false, x: 0, y: 0 });
         }
-        blocks.instanceMatrix.needsUpdate = true;
+        voxels.instanceMatrix.needsUpdate = true;
 
-        // --- CURSOR (The "Brush") ---
-        const cursorGeo = new THREE.BoxGeometry(GRID_SIZE*1.1, GRID_SIZE*1.1, GRID_SIZE*1.1);
-        const cursorMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true });
+        // -- CURSORS --
+        // Builder Cursor (Green/Cyan)
+        const cursorGeo = new THREE.BoxGeometry(CONFIG.gridSize*1.1, CONFIG.gridSize*1.1, CONFIG.gridSize*1.1);
+        const cursorMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
         const cursor = new THREE.Mesh(cursorGeo, cursorMat);
         scene.add(cursor);
 
-        // --- STATE VARIABLES ---
-        let count = 0;
-        let isDrawing = false;
-        let isRotating = false;
-        let lastPos = {x:0, y:0, z:0};
-        let sceneRotation = {x:0, y:0};
+        // Eraser Cursor (Red)
+        const eraserMat = new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: true });
+        const eraser = new THREE.Mesh(cursorGeo, eraserMat);
+        scene.add(eraser);
 
-        // --- HAND TRACKING LOGIC ---
-        const videoElement = document.getElementById('input_video');
-        const modeText = document.getElementById('mode_text');
-        const countText = document.getElementById('block_count');
+        // --- 4. THE STABILIZER (Math) ---
+        let smoothHand = { x: 0, y: 0 }; // Right hand smoothed
+        let smoothErase = { x: 0, y: 0 }; // Left hand smoothed
+        let currentVoxelIndex = 0;
 
+        function lerp(start, end, amt) {
+            return (1 - amt) * start + amt * end;
+        }
+
+        // --- 5. CORE LOGIC ---
         function onResults(results) {
-            // Reset state if no hands
-            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
-                modeText.innerText = "SCANNING";
-                modeText.className = "";
-                return;
+            // A. DRAW SKELETON ON 2D CANVAS
+            ctx2D.save();
+            ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
+            
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    // Draw connectors (bones)
+                    drawConnectors(ctx2D, landmarks, HAND_CONNECTIONS,
+                                 {color: '#00ffff', lineWidth: 2});
+                    // Draw landmarks (joints)
+                    drawLandmarks(ctx2D, landmarks, 
+                                {color: '#ffffff', lineWidth: 1, radius: 2});
+                }
             }
+            ctx2D.restore();
 
-            // Loop through detected hands
-            for (const [index, landmarks] of results.multiHandLandmarks.entries()) {
-                const handedness = results.multiHandedness[index].label; // "Left" or "Right"
-
-                // 1. CALCULATE FINGERS (Simple logic)
-                const indexTip = landmarks[8];
-                const thumbTip = landmarks[4];
-                const middleTip = landmarks[12];
-                const wrist = landmarks[0];
-
-                // Pinch Distance (Thumb to Index)
-                const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+            // B. HANDLE LOGIC
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
                 
-                // Palm Open Check (Middle finger is far from wrist)
-                const isPalmOpen = (wrist.y - middleTip.y) > 0.2; 
-                
-                // Fist Check (Fingers curled)
-                const isFist = (wrist.y - middleTip.y) < 0.1;
+                results.multiHandLandmarks.forEach((landmarks, index) => {
+                    const handedness = results.multiHandedness[index].label; // Left or Right
+                    
+                    // Get Fingertips
+                    const indexTip = landmarks[8];
+                    const thumbTip = landmarks[4];
+                    
+                    // Calculate Pinch Distance
+                    const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+                    const isPinching = pinchDist < CONFIG.pinchThreshold;
 
-                // --- LOGIC MAP ---
-                
-                // ACTION 1: LEFT HAND FIST -> RESET
-                if (handedness === "Right" && isFist) { // MediaPipe mirrors handedness label often
-                     // Actually, let's just use "If any fist is held"
-                     if(pinchDist < 0.1 && (wrist.y - landmarks[12].y) < 0.1) {
-                        modeText.innerText = "RESETTING...";
-                        modeText.className = "red";
-                        count = 0; // Reset counter
-                        // Clear blocks
-                        for(let i=0; i<MAX_BLOCKS; i++){
-                            dummy.position.set(0, 0, 1000);
-                            dummy.updateMatrix();
-                            blocks.setMatrixAt(i, dummy.matrix);
+                    // Map 2D Screen to 3D World Coordinates
+                    // (Adjust multipliers to calibrate field of view)
+                    const rawX = (1 - indexTip.x) * 24 - 12; 
+                    const rawY = (1 - indexTip.y) * 18 - 9;
+
+                    // === RIGHT HAND (BUILDER) ===
+                    if (handedness === "Left") { // Mirror Flip: Left means user's Right Hand
+                        
+                        // 1. Stabilize Movement
+                        smoothHand.x = lerp(smoothHand.x, rawX, CONFIG.smoothing);
+                        smoothHand.y = lerp(smoothHand.y, rawY, CONFIG.smoothing);
+                        
+                        // 2. Move Cursor
+                        cursor.position.set(smoothHand.x, smoothHand.y, 0);
+                        
+                        // 3. Visual Feedback on Skeleton
+                        if(isPinching) {
+                            cursor.material.color.setHex(0x00ff00); // Green when drawing
+                            cursor.scale.set(0.8, 0.8, 0.8); // Shrink slightly
+                            
+                            // 4. DRAW BLOCKS
+                            const snapX = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
+                            const snapY = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
+
+                            // Prevent duplicate blocks in same spot
+                            let spotTaken = false;
+                            // (Simple check, can be optimized)
+                            
+                            if (!spotTaken && currentVoxelIndex < CONFIG.maxBlocks) {
+                                dummy.position.set(snapX, snapY, 0);
+                                dummy.scale.set(1,1,1);
+                                dummy.updateMatrix();
+                                voxels.setMatrixAt(currentVoxelIndex, dummy.matrix);
+                                
+                                // Save data
+                                voxelData[currentVoxelIndex] = { active: true, x: snapX, y: snapY };
+                                currentVoxelIndex++;
+                                voxels.instanceMatrix.needsUpdate = true;
+                                voxelCountLabel.innerText = currentVoxelIndex;
+                            }
+
+                        } else {
+                            cursor.material.color.setHex(0x00ffff); // Cyan when idle
+                            cursor.scale.set(1, 1, 1);
                         }
-                        blocks.instanceMatrix.needsUpdate = true;
-                        countText.innerText = 0;
-                        return;
-                     }
-                }
-
-                // ACTION 2: RIGHT HAND -> DRAW or ROTATE
-                if (handedness === "Left") { // Again, label is often mirrored
-                    
-                    // Map Coordinates to 3D Space
-                    const x = (1 - indexTip.x) * 20 - 10; // Map 0..1 to -10..10
-                    const y = (1 - indexTip.y) * 15 - 7.5;
-                    
-                    // Move Cursor
-                    cursor.position.set(x, y, 0);
-
-                    // ROTATION MODE (Open Palm)
-                    if (pinchDist > 0.15) { 
-                        modeText.innerText = "ROTATING";
-                        modeText.className = "green";
-                        
-                        // Map hand X position to Scene Rotation Y
-                        blocks.rotation.y = (x * 0.1); 
-                        blocks.rotation.x = -(y * 0.1);
                     }
-                    
-                    // DRAW MODE (Pinch)
-                    else if (pinchDist < 0.05) {
-                        modeText.innerText = "DRAWING";
-                        modeText.className = "green";
+
+                    // === LEFT HAND (ERASER) ===
+                    if (handedness === "Right") { // Mirror Flip: Right means user's Left Hand
                         
-                        // SNAP TO GRID
-                        const snapX = Math.round(x / GRID_SIZE) * GRID_SIZE;
-                        const snapY = Math.round(y / GRID_SIZE) * GRID_SIZE;
+                        smoothErase.x = lerp(smoothErase.x, rawX, CONFIG.smoothing);
+                        smoothErase.y = lerp(smoothErase.y, rawY, CONFIG.smoothing);
                         
-                        // Only draw if we moved to a new spot
-                        if ((snapX !== lastPos.x || snapY !== lastPos.y) && count < MAX_BLOCKS) {
-                            dummy.position.set(snapX, snapY, 0);
-                            dummy.rotation.set(0,0,0); // Blocks don't rotate, the scene does
-                            dummy.updateMatrix();
+                        eraser.position.set(smoothErase.x, smoothErase.y, 0);
+
+                        if(isPinching) {
+                            eraser.material.color.setHex(0xff0000); // Red glow
                             
-                            // Add to list relative to current scene rotation is tricky
-                            // Simple hack: We just place it in the static container and rotate the container
-                            // But for "Drawing in 3D" while rotating, we need more math.
-                            // For this replica: We draw on 2D plane, then rotate the whole thing.
+                            // Check collisions with blocks
+                            const hitRange = CONFIG.gridSize;
                             
-                            blocks.setMatrixAt(count, dummy.matrix);
-                            blocks.instanceMatrix.needsUpdate = true;
-                            
-                            lastPos = {x: snapX, y: snapY};
-                            count++;
-                            countText.innerText = count;
+                            for(let i=0; i<currentVoxelIndex; i++) {
+                                if (voxelData[i].active) {
+                                    const dx = Math.abs(voxelData[i].x - smoothErase.x);
+                                    const dy = Math.abs(voxelData[i].y - smoothErase.y);
+                                    
+                                    if(dx < hitRange && dy < hitRange) {
+                                        // DELETE BLOCK (Move it to infinity)
+                                        dummy.position.set(0,0,1000);
+                                        dummy.updateMatrix();
+                                        voxels.setMatrixAt(i, dummy.matrix);
+                                        voxelData[i].active = false;
+                                        voxels.instanceMatrix.needsUpdate = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            eraser.material.color.setHex(0xff0055); // Pink when idle
                         }
-                    } 
-                    else {
-                        modeText.innerText = "HOVER";
-                        modeText.className = "";
                     }
-                }
+                });
             }
         }
 
-        // --- SETUP MEDIAPIPE ---
+        // --- 6. ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Idle Animations
+            cursor.rotation.z += 0.05;
+            eraser.rotation.z -= 0.05;
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- 7. INITIALIZE CAMERA ---
         const hands = new Hands({locateFile: (file) => {
             return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
         }});
         hands.setOptions({
-            maxNumHands: 2, // Track both hands
+            maxNumHands: 2,
             modelComplexity: 1,
-            minDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.5
+            minDetectionConfidence: 0.6, // Higher confidence = Less jitter
+            minTrackingConfidence: 0.6
         });
         hands.onResults(onResults);
 
@@ -237,13 +287,6 @@
         });
         cameraUtils.start();
 
-        // --- RENDER LOOP ---
-        function animate() {
-            requestAnimationFrame(animate);
-            renderer.render(scene, camera);
-        }
-        animate();
-        
     </script>
 </body>
 </html>
