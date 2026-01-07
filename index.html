@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>JARVIS ARCHITECT V4</title>
+    <title>JARVIS ARCHITECT V4.1</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
 
@@ -24,8 +24,8 @@
         #loader-container {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: rgba(0,0,0,0.9); z-index: 20;
-            transition: opacity 0.8s;
+            background: rgba(0,0,0,1); z-index: 20; /* Solid black to hide camera flash */
+            transition: opacity 0.5s;
         }
         .circle {
             width: 120px; height: 120px;
@@ -50,7 +50,7 @@
 
     <div id="loader-container">
         <div class="circle"></div>
-        <div style="color:#00ffff; letter-spacing: 2px;">INITIALIZING SYSTEM...</div>
+        <div id="loading-text" style="color:#00ffff; letter-spacing: 2px;">INITIALIZING CORES...</div>
     </div>
 
     <div id="hud">
@@ -70,14 +70,14 @@
         // --- 1. CONFIGURATION ---
         const CONFIG = {
             gridSize: 0.8,
-            smoothing: 0.15, // 0.1 = Very Stable, 0.3 = Fast
+            smoothing: 0.15, 
             pinchThreshold: 0.05,
             maxBlocks: 1500
         };
 
         // --- 2. THREE.JS SETUP ---
         const scene = new THREE.Scene();
-        const world = new THREE.Group(); // All blocks live here
+        const world = new THREE.Group(); 
         scene.add(world);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
@@ -88,33 +88,29 @@
         document.body.appendChild(renderer.domElement);
 
         // --- 3. MATERIALS ---
-        // Blue Block (Placed)
         const blockGeo = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
         const blockMat = new THREE.MeshBasicMaterial({ 
             color: 0x00ffff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending 
         });
         const blockWire = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.3, transparent: true });
 
-        // Instanced Mesh
         const meshSolid = new THREE.InstancedMesh(blockGeo, blockMat, CONFIG.maxBlocks);
         const meshWire = new THREE.InstancedMesh(blockGeo, blockWire, CONFIG.maxBlocks);
         world.add(meshSolid);
         world.add(meshWire);
 
-        // Cursor (Right Hand - Builder)
         const cursorMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.4 });
         const cursor = new THREE.Mesh(blockGeo, cursorMat);
-        scene.add(cursor); // Cursor is separate from world rotation for easier aiming
+        scene.add(cursor); 
 
-        // Eraser (Left Hand - Destroyer)
         const eraserMat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true, transparent: true, opacity: 0.8 });
         const eraserCursor = new THREE.Mesh(blockGeo, eraserMat);
         scene.add(eraserCursor);
-        eraserCursor.visible = false; // Hide until left hand pinch
+        eraserCursor.visible = false; 
 
         // Init Blocks (Hide them)
         const dummy = new THREE.Object3D();
-        const voxelMap = new Map(); // Store positions to find/delete blocks
+        const voxelMap = new Map(); 
         
         function clearAllBlocks() {
             for(let i=0; i<CONFIG.maxBlocks; i++){
@@ -143,20 +139,21 @@
             return (1 - amt) * start + amt * end;
         }
 
-        // --- 5. MEDIAPIPE LOGIC ---
+        // --- 5. MEDIAPIPE LOGIC (FIXED) ---
         const loader = document.getElementById('loader-container');
+        const loadText = document.getElementById('loading-text');
         const statusLabel = document.getElementById('sys_status');
 
         function onResults(results) {
-            // ACTIVATE SYSTEM ON FIRST HAND DETECT
-            if (!systemActive && results.multiHandLandmarks.length > 0) {
+            // FIX: Remove loader on FIRST frame, even if no hands are detected
+            if (!systemActive) {
                 systemActive = true;
                 loader.classList.add('hidden');
                 statusLabel.innerText = "ONLINE";
                 statusLabel.style.color = "#00ff00";
             }
 
-            // HIDE CURSORS DEFAULT
+            // Default: Hide Cursors
             cursor.visible = false;
             eraserCursor.visible = false;
 
@@ -164,36 +161,28 @@
                 results.multiHandLandmarks.forEach((landmarks, index) => {
                     const label = results.multiHandedness[index].label; 
                     
-                    // =================================================
-                    // RIGHT HAND (BUILDER) - Label "Left" (Mirrored)
-                    // =================================================
+                    // RIGHT HAND (BUILDER) - Label "Left"
                     if (label === "Left") { 
                         cursor.visible = true;
                         const indexTip = landmarks[8];
                         const thumbTip = landmarks[4];
                         
-                        // 1. PINCH CHECK
                         const dist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
                         const isPinching = dist < CONFIG.pinchThreshold;
 
-                        // 2. COORDINATES
                         const x = (1 - indexTip.x) * 24 - 12;
                         const y = (1 - indexTip.y) * 18 - 9;
                         
-                        // 3. STABILIZE
                         targetHand.x = x; targetHand.y = y;
                         smoothHand.x = lerp(smoothHand.x, targetHand.x, CONFIG.smoothing);
                         smoothHand.y = lerp(smoothHand.y, targetHand.y, CONFIG.smoothing);
 
-                        // 4. MOVE CURSOR
                         cursor.position.set(smoothHand.x, smoothHand.y, 0);
 
-                        // 5. DRAW LOGIC
                         if (isPinching) {
-                            cursor.material.color.setHex(0x00ffff); // Blue
-                            cursor.material.wireframe = false; // Solid
+                            cursor.material.color.setHex(0x00ffff); 
+                            cursor.material.wireframe = false; 
                             
-                            // Snap to grid
                             const snapX = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
                             const snapY = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
                             const key = `${snapX},${snapY}`;
@@ -207,63 +196,61 @@
                                 meshSolid.instanceMatrix.needsUpdate = true;
                                 meshWire.instanceMatrix.needsUpdate = true;
                                 
-                                voxelMap.set(key, voxelCount); // Store index for eraser
+                                voxelMap.set(key, voxelCount); 
                                 voxelCount++;
                                 document.getElementById('count').innerText = voxelCount;
                             }
                         } else {
-                            cursor.material.color.setHex(0xffffff); // White
-                            cursor.material.wireframe = true; // Wireframe
+                            cursor.material.color.setHex(0xffffff); 
+                            cursor.material.wireframe = true; 
                         }
                     }
 
-                    // =================================================
-                    // LEFT HAND (TOOLS) - Label "Right" (Mirrored)
-                    // =================================================
+                    // LEFT HAND (TOOLS) - Label "Right"
                     if (label === "Right") {
                         const thumb = landmarks[4];
                         const indexF = landmarks[8];
                         const wrist = landmarks[0];
                         const middleF = landmarks[12];
 
-                        // 1. FIST CHECK (RESET)
-                        const isFist = (wrist.y < middleF.y); // Simple check: wrist below fingers? No, fingers below wrist
-                        // Better Fist Check: Tips are close to palm base
-                        const isFistBetter = landmarks[12].y > landmarks[9].y; // Tip below knuckle (inverted Y)
+                        // FIST CHECK (RESET)
+                        // Logic: Fingers curled below knuckles?
+                        const isFist = landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y;
                         
-                        if (landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y) {
-                            // FIST DETECTED -> RESET
+                        if (isFist) {
                             if(systemActive) {
                                 systemActive = false;
                                 loader.classList.remove('hidden');
+                                loadText.innerText = "SYSTEM REBOOT";
                                 statusLabel.innerText = "REBOOTING";
                                 statusLabel.style.color = "red";
                                 clearAllBlocks();
                                 world.rotation.set(0,0,0);
-                                setTimeout(() => { systemActive = true; loader.classList.add('hidden'); statusLabel.innerText = "ONLINE"; statusLabel.style.color="#00ff00"; }, 1500);
+                                setTimeout(() => { 
+                                    systemActive = true; 
+                                    loader.classList.add('hidden'); 
+                                    loadText.innerText = "INITIALIZING...";
+                                    statusLabel.innerText = "ONLINE"; 
+                                    statusLabel.style.color="#00ff00"; 
+                                }, 1500);
                             }
                         } 
                         else {
-                            // 2. PINCH CHECK (ERASER)
                             const dist = Math.hypot(indexF.x - thumb.x, indexF.y - thumb.y);
                             if (dist < CONFIG.pinchThreshold) {
                                 eraserCursor.visible = true;
-                                // Move Eraser
                                 const ex = (1 - indexF.x) * 24 - 12;
                                 const ey = (1 - indexF.y) * 18 - 9;
                                 smoothErase.x = lerp(smoothErase.x, ex, CONFIG.smoothing);
                                 smoothErase.y = lerp(smoothErase.y, ey, CONFIG.smoothing);
                                 eraserCursor.position.set(smoothErase.x, smoothErase.y, 0);
 
-                                // DELETE BLOCK LOGIC
                                 const snapX = Math.round(smoothErase.x / CONFIG.gridSize) * CONFIG.gridSize;
                                 const snapY = Math.round(smoothErase.y / CONFIG.gridSize) * CONFIG.gridSize;
                                 const key = `${snapX},${snapY}`;
 
                                 if (voxelMap.has(key)) {
                                     const indexToDelete = voxelMap.get(key);
-                                    
-                                    // Hide block by moving to infinity
                                     dummy.position.set(0,0,1000); 
                                     dummy.updateMatrix();
                                     meshSolid.setMatrixAt(indexToDelete, dummy.matrix);
@@ -271,13 +258,10 @@
                                     
                                     meshSolid.instanceMatrix.needsUpdate = true;
                                     meshWire.instanceMatrix.needsUpdate = true;
-                                    
                                     voxelMap.delete(key);
                                 }
                             } 
-                            // 3. OPEN PALM (ROTATE)
                             else {
-                                // Rotate world based on hand position
                                 const rotX = (landmarks[9].x - 0.5) * 2; 
                                 world.rotation.y = rotX;
                             }
@@ -290,22 +274,30 @@
         // --- 6. ANIMATION LOOP ---
         function animate() {
             requestAnimationFrame(animate);
-            // Idle Animations
             if(cursor.visible) { cursor.rotation.x += 0.02; cursor.rotation.y += 0.02; }
             if(eraserCursor.visible) { eraserCursor.rotation.z -= 0.1; }
-            
             renderer.render(scene, camera);
         }
         animate();
 
-        // --- 7. INIT CAMERA ---
+        // --- 7. INIT CAMERA (OPTIMIZED) ---
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+        
+        hands.setOptions({ 
+            maxNumHands: 2, 
+            modelComplexity: 0, // 0 = LITE (Fastest for Mobile), 1 = FULL
+            minDetectionConfidence: 0.5, 
+            minTrackingConfidence: 0.5 
+        });
+        
         hands.onResults(onResults);
 
         const cam = new Camera(document.getElementById('input_video'), {
-            onFrame: async () => await hands.send({image: document.getElementById('input_video')}),
-            width: 1280, height: 720
+            onFrame: async () => {
+                await hands.send({image: document.getElementById('input_video')});
+            },
+            width: 1280, // Lower res for faster processing
+            height: 720
         });
         cam.start();
 
