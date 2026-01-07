@@ -3,22 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>IRON MAN HUD V5</title>
+    <title>JARVIS HUD V6</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
 
-        /* VIDEO LAYER */
+        /* 1. CAMERA FEED */
         #input_video { 
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
             object-fit: cover; transform: scaleX(-1); opacity: 0.6; z-index: 0;
         }
 
-        /* HUD LAYER */
+        /* 2. UI OVERLAY */
         #hud {
             position: absolute; top: 20px; left: 20px; z-index: 10;
             color: #00ffff; pointer-events: none; font-weight: bold;
-            text-shadow: 0 0 10px #00ffff;
-            background: rgba(0,0,0,0.3); padding: 10px; border-left: 2px solid #00ffff;
+            background: rgba(0,0,0,0.5); padding: 10px; border-radius: 8px;
+            border: 1px solid #00ffff;
         }
     </style>
 
@@ -30,26 +30,31 @@
 <body>
 
     <div id="hud">
-        JARVIS_OS: <span style="color:#0f0">CONNECTED</span><br>
-        LEFT HAND: <span style="color:#00ffff">ARC REACTOR</span><br>
-        RIGHT HAND: <span style="color:#00ffff">BUILDER</span>
+        SYSTEM: <span style="color:#0f0">ONLINE</span><br>
+        VOXELS: <span id="count">0</span><br>
+        <span style="font-size: 10px; color: #aaa;">
+        [R] PINCH: DRAW<br>
+        [L] PINCH: ERASE<br>
+        [L] FIST: RESET<br>
+        [L] PALM: ROTATE
+        </span>
     </div>
 
-    <video id="input_video" playsinline></video>
+    <video id="input_video" autoplay muted playsinline></video>
 
     <script>
-        // --- 1. CONFIGURATION ---
+        // --- 1. SETTINGS ---
         const CONFIG = {
             gridSize: 0.8,
-            smoothing: 0.15, 
+            smoothing: 0.15, // 0.1 = Robotic/Stable, 0.4 = Fast
             pinchThreshold: 0.05,
             maxBlocks: 1500
         };
 
-        // --- 2. THREE.JS SETUP ---
+        // --- 2. 3D WORLD SETUP ---
         const scene = new THREE.Scene();
         const world = new THREE.Group(); 
-        scene.add(world);
+        scene.add(world); // We rotate this group, not the camera
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
         camera.position.z = 15;
@@ -58,44 +63,42 @@
         renderer.setSize(window.innerWidth, window.innerHeight);
         document.body.appendChild(renderer.domElement);
 
-        // --- 3. BUILDER MATERIALS (Right Hand) ---
+        // --- 3. MATERIALS & OBJECTS ---
+        
+        // A. THE BLOCKS (Blue Hologram)
         const blockGeo = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
         const blockMat = new THREE.MeshBasicMaterial({ 
             color: 0x00ffff, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending 
         });
         const blockWire = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.3, transparent: true });
 
+        // Optimized Rendering (InstancedMesh)
         const meshSolid = new THREE.InstancedMesh(blockGeo, blockMat, CONFIG.maxBlocks);
         const meshWire = new THREE.InstancedMesh(blockGeo, blockWire, CONFIG.maxBlocks);
         world.add(meshSolid);
         world.add(meshWire);
 
-        // --- 4. ARC REACTOR SETUP (Left Hand) ---
-        // Inner Core
-        const reactorGeo = new THREE.RingGeometry(0.8, 1.2, 32);
-        const reactorMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, side: THREE.DoubleSide, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending });
-        const reactor = new THREE.Mesh(reactorGeo, reactorMat);
-        
-        // Outer Ring
-        const reactorOuterGeo = new THREE.RingGeometry(1.4, 1.5, 32);
-        const reactorOuter = new THREE.Mesh(reactorOuterGeo, reactorMat);
-        reactor.add(reactorOuter);
-        scene.add(reactor); // Not in 'world' because it stays on hand
-        reactor.visible = false;
-
-        // Builder Cursor
-        const cursorMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.4 });
+        // B. CURSORS
+        // Builder Cursor (Right Hand)
+        const cursorMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.5 });
         const cursor = new THREE.Mesh(blockGeo, cursorMat);
-        scene.add(cursor); 
-        cursor.visible = false;
+        scene.add(cursor); // Separate from world so it doesn't rotate with blocks
 
-        // Init Blocks (Hide them)
+        // Eraser Cursor (Left Hand)
+        const eraserMat = new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true, transparent: true, opacity: 0.8 });
+        const eraser = new THREE.Mesh(blockGeo, eraserMat);
+        scene.add(eraser);
+        eraser.visible = false;
+
+        // Init Storage
         const dummy = new THREE.Object3D();
-        const voxelMap = new Map(); 
-        
-        function clearAllBlocks() {
+        const voxelMap = new Map(); // Key: "x,y", Value: Index
+        let voxelCount = 0;
+
+        // Clear Function
+        function clearWorld() {
             for(let i=0; i<CONFIG.maxBlocks; i++){
-                dummy.position.set(0,0,1000);
+                dummy.position.set(0,0,1000); // Move away
                 dummy.updateMatrix();
                 meshSolid.setMatrixAt(i, dummy.matrix);
                 meshWire.setMatrixAt(i, dummy.matrix);
@@ -104,72 +107,75 @@
             meshWire.instanceMatrix.needsUpdate = true;
             voxelMap.clear();
             voxelCount = 0;
+            document.getElementById('count').innerText = "0";
+            world.rotation.set(0,0,0); // Reset Rotation
         }
-        clearAllBlocks();
+        clearWorld(); // Run once at start
 
-        let voxelCount = 0;
-
-        // --- 5. STABILIZATION VARIABLES ---
-        let smoothHand = { x: 0, y: 0 }; 
-        let targetHand = { x: 0, y: 0 };
-        let smoothReactor = { x: 0, y: 0 };
-        let targetReactor = { x: 0, y: 0 };
-
+        // --- 4. STABILIZATION VARIABLES ---
+        let smoothRight = { x: 0, y: 0 }; 
+        let targetRight = { x: 0, y: 0 };
+        let smoothLeft = { x: 0, y: 0 };
+        
         function lerp(start, end, amt) {
             return (1 - amt) * start + amt * end;
         }
 
-        // --- 6. MEDIAPIPE LOGIC ---
+        // --- 5. HAND TRACKING LOGIC ---
         function onResults(results) {
-            // Hide cursors by default
             cursor.visible = false;
-            reactor.visible = false;
+            eraser.visible = false;
 
-            if (results.multiHandLandmarks.length > 0) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                
                 results.multiHandLandmarks.forEach((landmarks, index) => {
                     const label = results.multiHandedness[index].label; 
                     
-                    // ===========================================
-                    // RIGHT HAND (BUILDER) - Label "Left"
-                    // ===========================================
+                    // ---------------------------------------------------------
+                    // RIGHT HAND (BUILDER) -> MediaPipe Label "Left"
+                    // ---------------------------------------------------------
                     if (label === "Left") { 
                         cursor.visible = true;
                         const indexTip = landmarks[8];
                         const thumbTip = landmarks[4];
                         
+                        // Distance (Pinch)
                         const dist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
                         const isPinching = dist < CONFIG.pinchThreshold;
 
-                        // Coordinate Map
+                        // Coordinates (Map 0..1 to -12..12)
                         const x = (1 - indexTip.x) * 24 - 12;
                         const y = (1 - indexTip.y) * 18 - 9;
                         
                         // Stabilize
-                        targetHand.x = x; targetHand.y = y;
-                        smoothHand.x = lerp(smoothHand.x, targetHand.x, CONFIG.smoothing);
-                        smoothHand.y = lerp(smoothHand.y, targetHand.y, CONFIG.smoothing);
+                        targetRight.x = x; targetRight.y = y;
+                        smoothRight.x = lerp(smoothRight.x, targetRight.x, CONFIG.smoothing);
+                        smoothRight.y = lerp(smoothRight.y, targetRight.y, CONFIG.smoothing);
 
-                        cursor.position.set(smoothHand.x, smoothHand.y, 0);
+                        cursor.position.set(smoothRight.x, smoothRight.y, 0);
 
+                        // DRAW LOGIC
                         if (isPinching) {
                             cursor.material.color.setHex(0x00ffff); // Blue
                             cursor.material.wireframe = false;
                             
-                            const snapX = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
-                            const snapY = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
+                            // Snap to Grid
+                            const snapX = Math.round(smoothRight.x / CONFIG.gridSize) * CONFIG.gridSize;
+                            const snapY = Math.round(smoothRight.y / CONFIG.gridSize) * CONFIG.gridSize;
                             const key = `${snapX},${snapY}`;
 
+                            // Place Block
                             if (!voxelMap.has(key) && voxelCount < CONFIG.maxBlocks) {
                                 dummy.position.set(snapX, snapY, 0);
                                 dummy.updateMatrix();
                                 meshSolid.setMatrixAt(voxelCount, dummy.matrix);
                                 meshWire.setMatrixAt(voxelCount, dummy.matrix);
-                                
                                 meshSolid.instanceMatrix.needsUpdate = true;
                                 meshWire.instanceMatrix.needsUpdate = true;
                                 
                                 voxelMap.set(key, voxelCount);
                                 voxelCount++;
+                                document.getElementById('count').innerText = voxelCount;
                             }
                         } else {
                             cursor.material.color.setHex(0xffffff); // White
@@ -177,77 +183,94 @@
                         }
                     }
 
-                    // ===========================================
-                    // LEFT HAND (ARC REACTOR) - Label "Right"
-                    // ===========================================
+                    // ---------------------------------------------------------
+                    // LEFT HAND (TOOLS) -> MediaPipe Label "Right"
+                    // ---------------------------------------------------------
                     if (label === "Right") {
-                        reactor.visible = true;
+                        const thumb = landmarks[4];
+                        const indexF = landmarks[8];
+                        const wrist = landmarks[0];
                         
-                        // Track Palm Center (approximate using middle knuckle)
-                        const palmX = (1 - landmarks[9].x) * 24 - 12;
-                        const palmY = (1 - landmarks[9].y) * 18 - 9;
-                        
-                        // Stabilize Reactor
-                        targetReactor.x = palmX; targetReactor.y = palmY;
-                        smoothReactor.x = lerp(smoothReactor.x, targetReactor.x, CONFIG.smoothing);
-                        smoothReactor.y = lerp(smoothReactor.y, targetReactor.y, CONFIG.smoothing);
-                        
-                        reactor.position.set(smoothReactor.x, smoothReactor.y, 0);
-
-                        // FIST CHECK (RESET)
+                        // 1. FIST CHECK (RESET)
+                        // Are fingers curled? (Tip below knuckle)
                         const isFist = landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y;
                         
                         if (isFist) {
-                            // RED ALERT MODE
-                            reactor.material.color.setHex(0xff0000); // Red
-                            reactor.scale.set(0.8, 0.8, 0.8);
-                            
-                            // Reset everything instantly
-                            clearAllBlocks();
-                            world.rotation.set(0,0,0);
+                            // SHOW RESET FEEDBACK (Red Flash on HUD maybe?)
+                            clearWorld();
                         } 
                         else {
-                            // NORMAL MODE (ROTATE)
-                            reactor.material.color.setHex(0x00ffff); // Cyan
-                            reactor.scale.set(1.2, 1.2, 1.2);
-                            reactor.rotation.z -= 0.1; // Spin the reactor
+                            // 2. PINCH CHECK (ERASER)
+                            const dist = Math.hypot(indexF.x - thumb.x, indexF.y - thumb.y);
                             
-                            // Map Hand Position to World Rotation
-                            // Move hand Left/Right to rotate world Y
-                            const rotX = (landmarks[9].x - 0.5) * 3; 
-                            world.rotation.y = rotX;
+                            if (dist < CONFIG.pinchThreshold) {
+                                eraser.visible = true;
+                                
+                                const x = (1 - indexF.x) * 24 - 12;
+                                const y = (1 - indexF.y) * 18 - 9;
+                                
+                                smoothLeft.x = lerp(smoothLeft.x, x, CONFIG.smoothing);
+                                smoothLeft.y = lerp(smoothLeft.y, y, CONFIG.smoothing);
+                                eraser.position.set(smoothLeft.x, smoothLeft.y, 0);
+
+                                // Check Collision with Blocks
+                                const hitX = Math.round(smoothLeft.x / CONFIG.gridSize) * CONFIG.gridSize;
+                                const hitY = Math.round(smoothLeft.y / CONFIG.gridSize) * CONFIG.gridSize;
+                                const key = `${hitX},${hitY}`;
+
+                                if (voxelMap.has(key)) {
+                                    const idx = voxelMap.get(key);
+                                    // Delete by moving far away
+                                    dummy.position.set(0,0,1000);
+                                    dummy.updateMatrix();
+                                    meshSolid.setMatrixAt(idx, dummy.matrix);
+                                    meshWire.setMatrixAt(idx, dummy.matrix);
+                                    meshSolid.instanceMatrix.needsUpdate = true;
+                                    meshWire.instanceMatrix.needsUpdate = true;
+                                    voxelMap.delete(key);
+                                }
+                            } 
+                            // 3. PALM OPEN (ROTATE)
+                            else {
+                                // Rotate world based on hand position
+                                const rotX = (landmarks[9].x - 0.5) * 2.5; 
+                                world.rotation.y = rotX;
+                            }
                         }
                     }
                 });
             }
         }
 
-        // --- 7. ANIMATION LOOP ---
+        // --- 6. ANIMATION LOOP ---
         function animate() {
             requestAnimationFrame(animate);
+            // Idle Animations
             if(cursor.visible) { cursor.rotation.x += 0.02; cursor.rotation.y += 0.02; }
+            if(eraser.visible) { eraser.rotation.z -= 0.1; }
             renderer.render(scene, camera);
         }
         animate();
 
-        // --- 8. INIT CAMERA (MOBILE FAST MODE) ---
+        // --- 7. CAMERA START (Auto-Detect) ---
         const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
         
         hands.setOptions({ 
             maxNumHands: 2, 
-            modelComplexity: 0, // LITE MODEL (Fastest)
+            modelComplexity: 0, // Lite mode for mobile speed
             minDetectionConfidence: 0.5, 
             minTrackingConfidence: 0.5 
         });
         
         hands.onResults(onResults);
 
-        const cam = new Camera(document.getElementById('input_video'), {
+        const videoElement = document.getElementById('input_video');
+        const cam = new Camera(videoElement, {
             onFrame: async () => {
-                await hands.send({image: document.getElementById('input_video')});
+                await hands.send({image: videoElement});
             },
-            width: 640, // Reduced resolution for MAX speed
-            height: 480
+            width: 1280,
+            height: 720
         });
         cam.start();
 
