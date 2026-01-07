@@ -1,375 +1,212 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>Sarthak 1.1 – NEURAL NEXUS // SCALABLE</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <style>
-    body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', Courier, monospace; }
-    canvas { display: block; }
-    #ui-layer {
-      position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;
-      background: radial-gradient(circle, transparent 60%, black 100%); 
-    }
-    #hud {
-      position: absolute; top: 20px; left: 20px; color: #0f0; font-size: 14px; text-shadow: 0 0 5px #0f0;
-      z-index: 10;
-    }
-    .stat { display: block; margin-bottom: 5px; }
-    #cam-feed {
-      position: absolute; bottom: 20px; right: 20px; width: 160px; height: 120px;
-      border: 1px solid #00f; opacity: 0.7; z-index: 5; transform: scaleX(-1);
-    }
-    .loading { position: absolute; top:50%; left:50%; transform:translate(-50%, -50%); color:#0f0; }
-  </style>
-
-  <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>NEXUS: VOXEL ARCHITECT</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; }
+        /* FIX: Video must be visible and behind the canvas */
+        #input_video { 
+            position: absolute; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
+            object-fit: cover; 
+            transform: scaleX(-1); /* Mirror the webcam */
+            z-index: 0;
+        }
+        canvas { 
+            position: absolute; top: 0; left: 0; 
+            width: 100vw; height: 100vh; 
+            z-index: 1; /* Canvas sits on top of video */
+        }
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            color: #00ffcc; font-family: 'Courier New', monospace;
+            font-size: 14px; text-shadow: 0 0 5px #00ffcc;
+            pointer-events: none; z-index: 2;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
-
 <body>
-
-<div id="ui-layer">
-  <div id="hud">
-    <span class="stat">SYSTEM: <span id="sys-status">INITIALIZING...</span></span>
-    <span class="stat">PARTICLES: <span id="particle-count">50,000</span></span>
-    <span class="stat">MODE: <span id="mode-display">IDLE</span></span>
-    <span class="stat">GESTURE: <span id="gesture-debug">--</span></span>
-    <span class="stat">FPS: <span id="fps-display">0</span></span>
-  </div>
-</div>
-<div class="loading" id="loader">BOOTING NEURAL INTERFACE...</div>
-
-<video id="cam-feed" playsinline></video>
-
-<script>
-/**
- * SARTHAK 1.1 - NEURAL NEXUS (Refactored and Scalable)
- */
-
-// --- CONFIGURATION ---
-const PARTICLE_COUNT = 50000;
-const LERP_FACTOR = 0.05; 
-const COLORS = {
-  IDLE: 0x00ffff,    // Cyan Sphere
-  NETWORK: 0x00ff00, // Matrix Green Torus Knot
-  CORE: 0xff0044,    // Red Cube
-  RIPPLE: 0x3399ff,  // Blue Ripple (New Feature)
-  VOID: 0xffffff     
-};
-
-// --- GLOBAL STATE ---
-const State = {
-  mode: 'IDLE',
-  mouseX: 0,
-  mouseY: 0,
-  handActive: false,
-  rotationSpeed: 0.001
-};
-
-// --- THREE.JS SETUP (Standard initialization remains) ---
-const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x000000, 0.02);
-
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.z = 4;
-
-const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: "high-performance" });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-document.body.appendChild(renderer.domElement);
-document.getElementById('particle-count').innerText = PARTICLE_COUNT.toLocaleString(); // Update HUD
-
-// --- PARTICLE SYSTEM (Standard initialization remains) ---
-const geometry = new THREE.BufferGeometry();
-const currentPos = new Float32Array(PARTICLE_COUNT * 3);
-const targetPos = new Float32Array(PARTICLE_COUNT * 3);
-const colors = new Float32Array(PARTICLE_COUNT * 3);
-
-for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
-  currentPos[i] = (Math.random() - 0.5) * 10;
-  targetPos[i] = currentPos[i];
-  colors[i] = 1.0;
-}
-
-geometry.setAttribute('position', new THREE.BufferAttribute(currentPos, 3));
-geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-const material = new THREE.PointsMaterial({
-  size: 0.015,
-  vertexColors: true,
-  blending: THREE.AdditiveBlending,
-  depthWrite: false,
-  transparent: true,
-  opacity: 0.8
-});
-
-const particleSystem = new THREE.Points(geometry, material);
-scene.add(particleSystem);
-
-// --- UTILITIES ---
-function updateColor(hex) {
-  const c = new THREE.Color(hex);
-  const arr = geometry.attributes.color.array;
-  for(let i=0; i < PARTICLE_COUNT; i++) {
-    arr[i*3] = c.r;
-    arr[i*3+1] = c.g;
-    arr[i*3+2] = c.b;
-  }
-  geometry.attributes.color.needsUpdate = true;
-}
-
-// --- GEOMETRY GENERATORS ---
-
-// 1. SPHERE 
-function generateSphere() {
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const theta = Math.random() * Math.PI * 2;
-    const phi = Math.acos((Math.random() * 2) - 1);
-    const r = 1.5;
-    targetPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
-    targetPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
-    targetPos[i*3+2] = r * Math.cos(phi);
-  }
-}
-
-// 2. NETWORK 
-function generateNetwork() {
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const u = Math.random() * Math.PI * 2;
-    const p = 2; 
-    const q = 3;
-    const r = 0.8 + 0.4 * Math.cos(q * u);
-    const jitter = (Math.random() - 0.5) * 0.2;
-
-    targetPos[i*3] = (r * Math.cos(p * u)) * 2 + jitter;
-    targetPos[i*3+1] = (r * Math.sin(p * u)) * 2 + jitter;
-    targetPos[i*3+2] = (0.4 * Math.sin(q * u)) + jitter;
-  }
-}
-
-// 3. CORE 
-function generateCore() {
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    targetPos[i*3] = (Math.random() - 0.5) * 2.5;
-    targetPos[i*3+1] = (Math.random() - 0.5) * 2.5;
-    targetPos[i*3+2] = (Math.random() - 0.5) * 2.5;
-  }
-}
-
-// 4. RIPPLE (NEW: Data Flow)
-function generateRipple() {
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 2.0; // Fixed radius for a ring/ripple
+    <div id="ui">
+        BIO_SYNC: <span style="color:#0f0">CONNECTED</span><br>
+        MODE: <span id="mode">IDLE</span><br>
+        VOXELS: <span id="count">0</span> / 2000
+    </div>
     
-    // Slight jitter on the Z-axis to give it thickness
-    const z_jitter = (Math.random() - 0.5) * 0.3; 
-
-    targetPos[i*3] = radius * Math.cos(angle);
-    targetPos[i*3+1] = radius * Math.sin(angle);
-    targetPos[i*3+2] = z_jitter;
-  }
-}
-
-// Set initial state
-generateSphere();
-updateColor(COLORS.IDLE);
-
-// --- MEDIAPIPE LOGIC ---
-const videoElement = document.getElementById('cam-feed');
-const sysStatus = document.getElementById('sys-status');
-const modeDisplay = document.getElementById('mode-display');
-const gestureDebug = document.getElementById('gesture-debug');
-
-// *** Refactored State Dispatcher ***
-function setMode(mode) {
-    if (State.mode === mode) return; 
-
-    State.mode = mode;
-    let color, text, generator;
-
-    switch(mode) {
-        case 'IDLE':
-            color = COLORS.IDLE;
-            text = "JARVIS IDLE";
-            generator = generateSphere;
-            break;
-        case 'NETWORK':
-            color = COLORS.NETWORK;
-            text = "NEURAL NET";
-            generator = generateNetwork;
-            break;
-        case 'CORE':
-            color = COLORS.CORE;
-            text = "DATA CORE";
-            generator = generateCore;
-            break;
-        case 'RIPPLE': // New Mode
-            color = COLORS.RIPPLE;
-            text = "LIVE DATA FLOW";
-            generator = generateRipple;
-            break;
-        default:
-            return;
-    }
+    <video id="input_video" playsinline></video>
     
-    generator();
-    updateColor(color);
-    modeDisplay.innerText = text;
-    modeDisplay.style.color = new THREE.Color(color).getStyle();
-}
+    <script>
+        // --- CONFIGURATION ---
+        const MAX_VOXELS = 2000;
+        const GRID_SIZE = 0.8; // Size of blocks
+        const SMOOTHING = 0.2; // 0.1 = lazy, 0.9 = snappy
+        
+        // --- THREE.JS SETUP ---
+        const scene = new THREE.Scene();
+        // Camera matches typical webcam FOV roughly
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.z = 15;
 
-function onResults(results) {
-  document.getElementById('loader').style.display = 'none';
-  sysStatus.innerText = "ONLINE";
-  sysStatus.style.color = "#0f0";
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    State.handActive = true;
-    const hand = results.multiHandLandmarks[0];
-    
-    // Normalize coordinates (-1 to 1)
-    const cx = (hand[9].x - 0.5) * 2; 
-    const cy = (hand[9].y - 0.5) * 2;
+        // --- THE VOXEL ENGINE (InstancedMesh) ---
+        // This is the secret to high performance on mobile.
+        // We draw ONE geometry 2000 times.
+        const geometry = new THREE.BoxGeometry(GRID_SIZE, GRID_SIZE, GRID_SIZE);
+        const material = new THREE.MeshBasicMaterial({ 
+            color: 0x00ffff, 
+            wireframe: true,
+            transparent: true, 
+            opacity: 0.6,
+            blending: THREE.AdditiveBlending // THE "GLOW" EFFECT
+        });
+        
+        const voxels = new THREE.InstancedMesh(geometry, material, MAX_VOXELS);
+        // Initialize all instances off-screen (hidden)
+        const dummy = new THREE.Object3D();
+        for (let i = 0; i < MAX_VOXELS; i++) {
+            dummy.position.set(0, 0, 1000); 
+            dummy.updateMatrix();
+            voxels.setMatrixAt(i, dummy.matrix);
+        }
+        voxels.instanceMatrix.needsUpdate = true;
+        scene.add(voxels);
 
-    // Control Rotation based on hand position
-    State.mouseX = -cx * 2;
-    State.mouseY = -cy * 2;
+        // The "Cursor" (Shows where you are pointing)
+        const cursorGeo = new THREE.BoxGeometry(GRID_SIZE * 1.2, GRID_SIZE * 1.2, GRID_SIZE * 1.2);
+        const cursorMat = new THREE.MeshBasicMaterial({ color: 0xff0055, wireframe: true });
+        const cursor = new THREE.Mesh(cursorGeo, cursorMat);
+        scene.add(cursor);
 
-    // --- GESTURE DETECTION ---
-    const thumb = hand[4];
-    const index = hand[8];
-    const middle = hand[12];
-    
-    const pinchDistance = Math.hypot(thumb.x - index.x, thumb.y - index.y);
-    const vSignDistance = Math.hypot(index.x - middle.x, index.y - middle.y);
+        // --- STATE VARIABLES ---
+        let voxelCount = 0;
+        let isPinching = false;
+        let lastGridPos = { x: null, y: null, z: null };
+        let handPos = { x: 0, y: 0, z: 0 }; // Raw target
+        let smoothedPos = { x: 0, y: 0, z: 0 }; // Lerped position
 
-    let currentGesture = "NONE";
-    
-    // 1. PINCH (CORE)
-    if (pinchDistance < 0.05) {
-        setMode('CORE');
-        currentGesture = "PINCH";
-    } 
-    // 2. V-SIGN (RIPPLE)
-    else if (vSignDistance > 0.15 && pinchDistance > 0.10) {
-        // V-Sign: Index and Middle are far apart, AND Thumb/Index are not pinched.
-        setMode('RIPPLE');
-        currentGesture = "V-SIGN";
-    }
-    // 3. WIDE OPEN (NETWORK)
-    else if (pinchDistance > 0.20) {
-        setMode('NETWORK');
-        currentGesture = "WIDE OPEN";
-    }
-    // 4. DEFAULT (IDLE)
-    else {
-        setMode('IDLE');
-        currentGesture = "RELAXED";
-    }
+        // --- MEDIAPIPE LOGIC ---
+        const videoElement = document.getElementById('input_video');
+        const modeLabel = document.getElementById('mode');
+        const countLabel = document.getElementById('count');
 
-    gestureDebug.innerText = currentGesture;
+        function onResults(results) {
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0];
+                
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+                const wrist = landmarks[0];
 
-  } else {
-    State.handActive = false;
-    State.mouseX *= 0.95;
-    State.mouseY *= 0.95;
-    gestureDebug.innerText = "NO HAND";
-  }
-}
+                // 1. PINCH DETECTION
+                const distance = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+                const threshold = 0.06; // Sensitivity
+                
+                isPinching = distance < threshold;
+                
+                // 2. MAPPING COORDINATES
+                // Map 0-1 video coords to approx -10 to +10 world coords
+                const aspect = window.innerWidth / window.innerHeight;
+                const rangeX = 20 * aspect;
+                const rangeY = 20;
+                
+                // Flip X because webcam is mirrored
+                handPos.x = (1 - indexTip.x) * rangeX - (rangeX / 2);
+                handPos.y = (1 - indexTip.y) * rangeY - (rangeY / 2);
+                
+                // Depth estimation based on hand size (wrist to middle finger mcp)
+                // Just a rough guess: closer hand = bigger distance between points
+                // For now, let's keep Z fixed at 0 for easier drawing on a 2D plane
+                handPos.z = 0; 
+                
+                // UPDATE UI
+                if (isPinching) {
+                    modeLabel.innerText = "DRAWING";
+                    modeLabel.style.color = "#00ffff";
+                    cursor.material.color.setHex(0x00ffff);
+                } else {
+                    modeLabel.innerText = "HOVER";
+                    modeLabel.style.color = "#aaaaaa";
+                    cursor.material.color.setHex(0xff0055);
+                    // Reset grid lock so we can draw in the same spot again if we want
+                    lastGridPos = { x: null, y: null, z: null };
+                }
+            }
+        }
 
-const hands = new Hands({locateFile: (file) => {
-  return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
-}});
+        // --- MAIN LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
 
-hands.setOptions({
-  maxNumHands: 1,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.7
-});
+            // 1. SMOOTHING (LERP)
+            smoothedPos.x += (handPos.x - smoothedPos.x) * SMOOTHING;
+            smoothedPos.y += (handPos.y - smoothedPos.y) * SMOOTHING;
+            smoothedPos.z += (handPos.z - smoothedPos.z) * SMOOTHING;
 
-hands.onResults(onResults);
+            // Update Cursor
+            cursor.position.set(smoothedPos.x, smoothedPos.y, smoothedPos.z);
+            cursor.rotation.x += 0.02;
+            cursor.rotation.y += 0.02;
 
-const cameraUtils = new Camera(videoElement, {
-  onFrame: async () => {
-    await hands.send({image: videoElement});
-  },
-  width: 640,
-  height: 480
-});
-cameraUtils.start();
+            // 2. VOXEL PLACEMENT LOGIC
+            if (isPinching && voxelCount < MAX_VOXELS) {
+                // Snap to Grid
+                const snapX = Math.round(smoothedPos.x / GRID_SIZE) * GRID_SIZE;
+                const snapY = Math.round(smoothedPos.y / GRID_SIZE) * GRID_SIZE;
+                const snapZ = 0; // Keep flat for now
 
-// --- ANIMATION LOOP ---
-let time = 0;
-const fpsElem = document.getElementById('fps-display');
-let lastTime = performance.now();
-let frames = 0;
+                // Check if we already placed a block here recently
+                if (snapX !== lastGridPos.x || snapY !== lastGridPos.y) {
+                    
+                    // PLACE BLOCK
+                    dummy.position.set(snapX, snapY, snapZ);
+                    dummy.scale.set(1, 1, 1);
+                    dummy.updateMatrix();
+                    
+                    voxels.setMatrixAt(voxelCount, dummy.matrix);
+                    voxels.instanceMatrix.needsUpdate = true;
+                    
+                    voxelCount++;
+                    countLabel.innerText = voxelCount;
+                    
+                    // Update Memory
+                    lastGridPos = { x: snapX, y: snapY, z: snapZ };
+                }
+            }
 
-function animate() {
-  requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        animate();
 
-  // FPS Counter
-  frames++;
-  const now = performance.now();
-  if (now - lastTime >= 1000) {
-      fpsElem.innerText = frames;
-      frames = 0;
-      lastTime = now;
-  }
+        // --- INITIALIZATION ---
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        
+        hands.setOptions({
+            maxNumHands: 1,
+            modelComplexity: 0, // 0 = FAST (Mobile Optimized), 1 = ACCURATE
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        
+        hands.onResults(onResults);
 
-  time += 0.005;
-
-  // Particle Logic (The Lerp)
-  const posAttribute = geometry.attributes.position;
-  const current = posAttribute.array;
-  
-  for (let i = 0; i < PARTICLE_COUNT * 3; i++) {
-    // Linear Interpolation: Current -> Target
-    current[i] += (targetPos[i] - current[i]) * LERP_FACTOR;
-  }
-
-  // --- MODE-SPECIFIC ANIMATION ---
-  if(State.mode === 'NETWORK') {
-      // Breathing Torus
-      particleSystem.rotation.z = time * 0.2;
-  } else if (State.mode === 'RIPPLE') {
-      // Live Data Pulse: The ripple expands and contracts slightly
-      const pulse = 1 + Math.sin(time * 5) * 0.05; 
-      particleSystem.scale.set(pulse, pulse, pulse);
-      particleSystem.rotation.y += 0.01;
-      particleSystem.rotation.x = Math.cos(time) * 0.1;
-  } else {
-      particleSystem.rotation.z *= 0.9; // Slow stop
-      particleSystem.scale.set(1, 1, 1); // Reset scale
-  }
-
-  // Rotation Control
-  const targetRotX = State.mouseY * 0.5;
-  const targetRotY = State.mouseX * 0.5;
-
-  if (!State.handActive) {
-      particleSystem.rotation.y += 0.002; // Auto idle spin
-  } else {
-      particleSystem.rotation.x += (targetRotX - particleSystem.rotation.x) * 0.1;
-      particleSystem.rotation.y += (targetRotY - particleSystem.rotation.y) * 0.1;
-  }
-
-  posAttribute.needsUpdate = true;
-  renderer.render(scene, camera);
-}
-
-// Handle Resize
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
-
-animate();
-
-</script>
+        const cameraUtils = new Camera(videoElement, {
+            onFrame: async () => {
+                await hands.send({image: videoElement});
+            },
+            width: 1280,
+            height: 720
+        });
+        cameraUtils.start();
+    </script>
 </body>
 </html>
