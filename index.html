@@ -3,20 +3,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>JARVIS MK.XII INFINITY</title>
+    <title>JARVIS MK.XI ULTIMATE</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
 
-        /* LAYERS */
+        /* VIDEO BACKGROUND */
         #input_video { 
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
             object-fit: cover; transform: scaleX(-1); opacity: 0.2; z-index: 0;
-            filter: contrast(1.2) brightness(0.8);
+            filter: grayscale(100%) contrast(1.2); /* Sci-Fi Look */
         }
+        
+        /* 2D HUD LAYER */
         #output_canvas {
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
             transform: scaleX(-1); z-index: 2; pointer-events: none;
         }
+        
+        /* 3D WORLD LAYER */
         #three_canvas { 
             position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
             z-index: 1; pointer-events: none;
@@ -29,19 +33,20 @@
             align-items: center; justify-content: center;
         }
         #start-btn {
-            padding: 15px 50px; border: 1px solid #00ffff; background: rgba(0,255,255,0.1);
-            color: #00ffff; font-size: 20px; font-family: 'Courier New'; cursor: pointer;
-            text-transform: uppercase; letter-spacing: 4px; box-shadow: 0 0 40px #00ffff;
-            transition: 0.3s;
+            padding: 15px 50px; border: 1px solid #00ffff; background: rgba(0,255,255,0.05);
+            color: #00ffff; font-size: 24px; font-family: 'Courier New'; cursor: pointer;
+            text-transform: uppercase; letter-spacing: 5px; box-shadow: 0 0 30px #00ffff;
+            transition: all 0.3s;
         }
-        #start-btn:hover { background: #00ffff; color: #000; }
+        #start-btn:hover { background: #00ffff; color: #000; box-shadow: 0 0 60px #00ffff; }
 
-        /* HUD */
-        #hud {
+        /* HUD ELEMENTS */
+        #hud-top {
             position: absolute; top: 20px; left: 20px; z-index: 10;
             color: #00ffff; font-weight: bold; pointer-events: none; display: none;
-            text-shadow: 0 0 10px #00ffff;
+            text-shadow: 0 0 10px #00ffff; border-left: 4px solid #00ffff; padding-left: 10px;
         }
+        .hud-line { height: 1px; background: #00ffff; width: 200px; margin-top: 5px; opacity: 0.5; }
     </style>
 
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -53,85 +58,103 @@
 <body>
 
     <div id="start-screen">
-        <h1 style="color:white; font-size: 14px; margin-bottom: 30px;">STARK INDUSTRIES // MK.XII</h1>
+        <h1 style="color:white; font-size: 12px; letter-spacing: 2px; margin-bottom: 30px; opacity: 0.7;">STARK INDUSTRIES PROTOTYPE // MK.XI</h1>
         <button id="start-btn" onclick="startSystem()">INITIALIZE</button>
     </div>
 
-    <div id="hud">
+    <div id="hud-top">
         SYSTEM: <span style="color:#0f0">ONLINE</span><br>
-        VOXELS: <span id="count">0</span>
+        VOXELS: <span id="count">0</span> / 2000<br>
+        <div class="hud-line"></div>
+        <div style="font-size:10px; color:#aaa; margin-top:5px; line-height: 1.5;">
+        [R] PINCH & HOLD: CONSTRUCT<br>
+        [L] FIST & DRAG: ROTATE WORLD<br>
+        [L] PINCH: DISINTEGRATE<br>
+        [L] PALM HOLD: SYSTEM RESET
+        </div>
     </div>
 
     <video id="input_video" playsinline></video>
     <canvas id="output_canvas"></canvas>
 
     <script>
-        // --- CONFIG ---
+        // --- CONFIGURATION ---
         const CONFIG = {
-            gridSize: 1.0, // Bigger blocks as requested
-            smoothing: 0.1, // Responsive but stable
+            gridSize: 0.8,
+            smoothing: 0.12, // Smooth robotic feel
             pinchThreshold: 0.05,
-            initTime: 15, // Frames to hold before "Painting" starts (approx 0.5s)
-            maxBlocks: 3000
+            buildTime: 15, // Frames to hold pinch before building (approx 0.4s)
+            resetTime: 60, // Frames to hold reset (approx 2s)
+            maxBlocks: 2000
         };
 
-        // --- THREE.JS ---
+        // --- THREE.JS SETUP ---
         const scene = new THREE.Scene();
-        // Container for rotation/zoom
+        // Fog for depth
+        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+
         const world = new THREE.Group(); 
         scene.add(world);
 
         const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-        camera.position.z = 18;
+        camera.position.z = 16;
+        camera.position.y = 0;
 
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
         renderer.setSize(window.innerWidth, window.innerHeight);
         renderer.domElement.id = "three_canvas";
         document.body.appendChild(renderer.domElement);
 
-        // --- MATERIALS ---
-        const geometry = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
-        // "Holographic" Blue Material
-        const blockMat = new THREE.MeshPhongMaterial({ 
-            color: 0x00ffff, transparent: true, opacity: 0.85, 
-            emissive: 0x004444, shininess: 80 
-        });
-        const wireMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.4, transparent: true });
+        // --- LIGHTING (The "Free Hand" Upgrade) ---
+        // Ambient glow
+        const ambientLight = new THREE.AmbientLight(0x404040, 2); 
+        scene.add(ambientLight);
 
+        // Dynamic Hand Light (Follows Right Hand)
+        const handLight = new THREE.PointLight(0x00ffff, 2, 20);
+        scene.add(handLight);
+
+        // --- MATERIALS & OBJECTS ---
+        const geometry = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
+        
+        // Solid Block Material (Glowing)
+        const blockMat = new THREE.MeshPhongMaterial({ 
+            color: 0x00ffff, 
+            transparent: true, 
+            opacity: 0.9, 
+            emissive: 0x004444,
+            shininess: 100
+        });
+
+        // Wireframe Overlay
+        const wireMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.3, transparent: true });
+
+        // Instanced Meshes
         const meshSolid = new THREE.InstancedMesh(geometry, blockMat, CONFIG.maxBlocks);
         const meshWire = new THREE.InstancedMesh(geometry, wireMat, CONFIG.maxBlocks);
         world.add(meshSolid);
         world.add(meshWire);
 
-        // Lighting
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 7);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
-
-        // Cursors
-        const cursor = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, opacity: 0.5, transparent: true }));
+        // Ghost Cursor (Wireframe)
+        const cursor = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, opacity: 0.4, transparent: true }));
         scene.add(cursor);
-        
+
+        // Eraser Cursor (Red Box)
         const eraser = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true, opacity: 0.8, transparent: true }));
         scene.add(eraser);
         eraser.visible = false;
 
-        // --- STATE ---
+        // Grid Floor (Visual Reference)
+        const gridHelper = new THREE.GridHelper(50, 50, 0x004444, 0x001111);
+        gridHelper.rotation.x = Math.PI / 2;
+        gridHelper.position.z = -5;
+        world.add(gridHelper);
+
+        // --- DATA STRUCTURES ---
         const dummy = new THREE.Object3D();
         const voxelMap = new Map();
         let voxelCount = 0;
-        let smoothHand = {x:0, y:0};
         
-        // Logic Flags
-        let rightPinchTimer = 0;
-        let leftPinchTimer = 0;
-        let isDrawing = false;
-        let isErasing = false;
-        
-        // Navigation State
-        let lastFist = { x: null, y: null };
-
         function clearWorld() {
             for(let i=0; i<CONFIG.maxBlocks; i++){
                 dummy.position.set(0,0,1000); dummy.updateMatrix();
@@ -143,34 +166,48 @@
             voxelMap.clear();
             voxelCount = 0;
             world.rotation.set(0,0,0);
-            world.position.z = 0;
             document.getElementById('count').innerText = 0;
         }
         clearWorld();
 
+        // --- VARIABLES ---
+        let smoothHand = {x:0, y:0};
+        let lastLeftHand = {x:0, y:0};
+        let isRotating = false;
+
+        // Timers for "Hold" Actions
+        let buildTimer = 0;
+        let resetTimer = 0;
+        let hasBuilt = false; // Prevent rapid-fire building
+
         function lerp(start, end, amt) { return (1-amt)*start + amt*end; }
 
-        // --- 2D CANVAS (HUD) ---
+        // --- 2D CANVAS (HUD & Tech Lines) ---
         const canvas2D = document.getElementById('output_canvas');
         const ctx2D = canvas2D.getContext('2d');
         canvas2D.width = window.innerWidth;
         canvas2D.height = window.innerHeight;
 
-        function drawArc(x, y, progress, color) {
+        function drawHUDCircle(x, y, progress, color) {
+            ctx2D.beginPath();
+            ctx2D.arc(x, y, 25, 0, Math.PI * 2);
+            ctx2D.lineWidth = 3;
+            ctx2D.strokeStyle = "rgba(255,255,255,0.1)";
+            ctx2D.stroke();
+
             ctx2D.beginPath();
             ctx2D.arc(x, y, 25, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * progress));
-            ctx2D.lineWidth = 5;
+            ctx2D.lineWidth = 4;
             ctx2D.strokeStyle = color;
-            ctx2D.lineCap = "round";
-            ctx2D.shadowBlur = 15;
+            ctx2D.shadowBlur = 10;
             ctx2D.shadowColor = color;
             ctx2D.stroke();
             ctx2D.shadowBlur = 0;
         }
 
-        // --- LOGIC LOOP ---
+        // --- HAND TRACKING LOGIC ---
         function onResults(results) {
-            // 1. Draw Tech Lines
+            // 1. CLEAR & DRAW SKELETON
             ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
             if (results.multiHandLandmarks) {
                 for (const landmarks of results.multiHandLandmarks) {
@@ -187,144 +224,163 @@
                     const label = results.multiHandedness[index].label;
 
                     // ==========================================
-                    // RIGHT HAND (BUILDER)
+                    // RIGHT HAND (BUILDER) -> Label "Left"
                     // ==========================================
                     if (label === "Left") {
                         const tip = landmarks[8];
                         const thumb = landmarks[4];
                         const pinch = Math.hypot(tip.x - thumb.x, tip.y - thumb.y) < CONFIG.pinchThreshold;
 
+                        // 3D Mapping
                         const x = (1 - tip.x) * 24 - 12;
                         const y = (1 - tip.y) * 18 - 9;
                         const screenX = (1 - tip.x) * canvas2D.width;
                         const screenY = tip.y * canvas2D.height;
                         
-                        // Stabilize
+                        // Stabilization
                         smoothHand.x = lerp(smoothHand.x, x, CONFIG.smoothing);
                         smoothHand.y = lerp(smoothHand.y, y, CONFIG.smoothing);
 
+                        // Move Light & Cursor
+                        handLight.position.set(smoothHand.x, smoothHand.y, 2);
                         cursor.visible = true;
                         cursor.position.set(smoothHand.x, smoothHand.y, 0);
 
-                        // LOGIC: INITIALIZE -> CONTINUOUS DRAW
+                        // ACTION: BUILD
                         if (pinch) {
-                            rightPinchTimer++;
-                            const progress = Math.min(rightPinchTimer / CONFIG.initTime, 1);
-                            
-                            if (rightPinchTimer < CONFIG.initTime) {
-                                // Loading Phase
-                                drawArc(screenX, screenY, progress, "#00ffff");
-                            } else {
-                                // DRAWING PHASE (Continuous)
-                                isDrawing = true;
-                                cursor.material.wireframe = false; // Solid Cursor
-                                cursor.material.color.setHex(0x00ffff);
-                                
-                                // Place Block
-                                const sx = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
-                                const sy = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
-                                const key = `${sx},${sy}`;
+                            if (!hasBuilt) {
+                                buildTimer++;
+                                const progress = Math.min(buildTimer / CONFIG.buildTime, 1);
+                                drawHUDCircle(screenX, screenY, progress, "#00ffff");
 
-                                if (!voxelMap.has(key) && voxelCount < CONFIG.maxBlocks) {
-                                    dummy.position.set(sx, sy, 0);
-                                    dummy.updateMatrix();
-                                    meshSolid.setMatrixAt(voxelCount, dummy.matrix);
-                                    meshWire.setMatrixAt(voxelCount, dummy.matrix);
-                                    meshSolid.instanceMatrix.needsUpdate = true;
-                                    meshWire.instanceMatrix.needsUpdate = true;
-                                    
-                                    voxelMap.set(key, voxelCount);
-                                    voxelCount++;
-                                    document.getElementById('count').innerText = voxelCount;
+                                if (buildTimer >= CONFIG.buildTime) {
+                                    // *** LOCK & BUILD ***
+                                    const sx = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
+                                    const sy = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
+                                    const key = `${sx},${sy}`;
+
+                                    if (!voxelMap.has(key) && voxelCount < CONFIG.maxBlocks) {
+                                        dummy.position.set(sx, sy, 0);
+                                        dummy.updateMatrix();
+                                        meshSolid.setMatrixAt(voxelCount, dummy.matrix);
+                                        meshWire.setMatrixAt(voxelCount, dummy.matrix);
+                                        meshSolid.instanceMatrix.needsUpdate = true;
+                                        meshWire.instanceMatrix.needsUpdate = true;
+                                        
+                                        voxelMap.set(key, voxelCount);
+                                        voxelCount++;
+                                        document.getElementById('count').innerText = voxelCount;
+                                        
+                                        // Visual Flash
+                                        cursor.scale.set(1.5, 1.5, 1.5); 
+                                        setTimeout(() => cursor.scale.set(1,1,1), 100);
+                                        hasBuilt = true; // Lock until release
+                                    }
                                 }
+                            } else {
+                                // Already built, waiting for release
+                                drawHUDCircle(screenX, screenY, 1, "#00ff00"); // Green "Done" Circle
                             }
                         } else {
-                            // Reset
-                            rightPinchTimer = 0;
-                            isDrawing = false;
-                            cursor.material.wireframe = true;
-                            cursor.material.color.setHex(0xffffff);
+                            // Reset Build State
+                            buildTimer = 0;
+                            hasBuilt = false;
                         }
                     }
 
                     // ==========================================
-                    // LEFT HAND (NAVIGATOR / DESTROYER)
+                    // LEFT HAND (CONTROLLER) -> Label "Right"
                     // ==========================================
                     if (label === "Right") {
                         const tip = landmarks[8];
                         const thumb = landmarks[4];
                         const pinch = Math.hypot(tip.x - thumb.x, tip.y - thumb.y) < CONFIG.pinchThreshold;
+                        
+                        // Fist Check (Fingers curled)
                         const isFist = landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y;
                         
+                        // Open Palm (Fingers Up)
+                        const isPalm = !isFist && !pinch;
+
                         const screenX = (1 - tip.x) * canvas2D.width;
                         const screenY = tip.y * canvas2D.height;
 
-                        // 1. ROTATE & ZOOM (FIST)
+                        // ACTION 1: ROTATE (FIST + DRAG)
                         if (isFist) {
-                            const cx = landmarks[9].x;
-                            const cy = landmarks[9].y;
+                            const currX = landmarks[9].x; // Middle knuckle
+                            const currY = landmarks[9].y;
 
-                            if (lastFist.x !== null) {
-                                const dx = cx - lastFist.x;
-                                const dy = cy - lastFist.y;
-                                
-                                // X-Axis Move = ROTATE
-                                world.rotation.y += dx * 5; 
-                                
-                                // Y-Axis Move = ZOOM
-                                world.position.z += dy * 10;
+                            if (isRotating) {
+                                const dx = currX - lastLeftHand.x;
+                                const dy = currY - lastLeftHand.y;
+                                world.rotation.y += dx * 4; // Horizontal Spin
+                                world.rotation.x += dy * 4; // Vertical Tilt
                             }
-                            lastFist = { x: cx, y: cy };
                             
-                            // Visual
-                            drawArc(screenX, screenY, 1, "#00ff00");
+                            lastLeftHand = {x: currX, y: currY};
+                            isRotating = true;
+                            
+                            // Visual: Green Lock Icon
+                            drawHUDCircle(screenX, screenY, 1, "#00ff00");
                         } else {
-                            lastFist = { x: null, y: null };
+                            isRotating = false;
                         }
 
-                        // 2. ERASE (PINCH)
-                        if (pinch && !isFist) {
-                            leftPinchTimer++;
-                            const progress = Math.min(leftPinchTimer / 10, 1); // Fast load
-                            drawArc(screenX, screenY, progress, "#ff0000");
+                        // ACTION 2: RESET (PALM HOLD)
+                        if (isPalm) {
+                            // Are we holding still?
+                            resetTimer++;
+                            const progress = Math.min(resetTimer / CONFIG.resetTime, 1);
+                            if (resetTimer > 10) { // Slight delay to prevent instant trigger
+                                drawHUDCircle(screenX, screenY, progress, "#ff0000");
+                            }
 
-                            if (leftPinchTimer > 10) {
-                                eraser.visible = true;
-                                const ex = (1 - tip.x) * 24 - 12;
-                                const ey = (1 - tip.y) * 18 - 9;
-                                eraser.position.set(ex, ey, 0);
-
-                                const sx = Math.round(ex / CONFIG.gridSize) * CONFIG.gridSize;
-                                const sy = Math.round(ey / CONFIG.gridSize) * CONFIG.gridSize;
-                                const key = `${sx},${sy}`;
-
-                                if(voxelMap.has(key)) {
-                                    const idx = voxelMap.get(key);
-                                    dummy.position.set(0,0,1000); dummy.updateMatrix();
-                                    meshSolid.setMatrixAt(idx, dummy.matrix);
-                                    meshWire.setMatrixAt(idx, dummy.matrix);
-                                    meshSolid.instanceMatrix.needsUpdate = true;
-                                    meshWire.instanceMatrix.needsUpdate = true;
-                                    voxelMap.delete(key);
-                                }
+                            if (resetTimer >= CONFIG.resetTime) {
+                                clearWorld();
+                                resetTimer = 0;
                             }
                         } else {
-                            leftPinchTimer = 0;
+                            resetTimer = 0;
+                        }
+
+                        // ACTION 3: ERASE (PINCH)
+                        if (pinch) {
+                            eraser.visible = true;
+                            const ex = (1 - tip.x) * 24 - 12;
+                            const ey = (1 - tip.y) * 18 - 9;
+                            eraser.position.set(ex, ey, 0);
+                            drawHUDCircle(screenX, screenY, 1, "#ff0055"); // Pink Eraser Circle
+
+                            const sx = Math.round(ex / CONFIG.gridSize) * CONFIG.gridSize;
+                            const sy = Math.round(ey / CONFIG.gridSize) * CONFIG.gridSize;
+                            const key = `${sx},${sy}`;
+                            
+                            if(voxelMap.has(key)) {
+                                const idx = voxelMap.get(key);
+                                dummy.position.set(0,0,1000); dummy.updateMatrix();
+                                meshSolid.setMatrixAt(idx, dummy.matrix);
+                                meshWire.setMatrixAt(idx, dummy.matrix);
+                                meshSolid.instanceMatrix.needsUpdate = true;
+                                meshWire.instanceMatrix.needsUpdate = true;
+                                voxelMap.delete(key);
+                            }
                         }
                     }
                 });
             }
         }
 
+        // --- ANIMATION LOOP ---
         function animate() {
             requestAnimationFrame(animate);
             renderer.render(scene, camera);
         }
         animate();
 
+        // --- STARTUP ---
         function startSystem() {
             document.getElementById('start-screen').style.display = 'none';
-            document.getElementById('hud').style.display = 'block';
+            document.getElementById('hud-top').style.display = 'block';
 
             const videoElement = document.getElementById('input_video');
             const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
