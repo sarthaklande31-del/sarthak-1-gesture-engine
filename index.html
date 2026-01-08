@@ -1,192 +1,261 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Iron Hand – Build in Thin Air</title>
-
-<style>
-html,body{
-  margin:0;
-  padding:0;
-  overflow:hidden;
-  background:#000;
-  font-family:system-ui;
-}
-#hud{
-  position:fixed;
-  top:10px;
-  left:50%;
-  transform:translateX(-50%);
-  color:#7fffd4;
-  font-size:14px;
-  letter-spacing:.6px;
-  opacity:.85;
-}
-#video{display:none;}
-canvas{position:absolute;top:0;left:0;}
-</style>
-
-<script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+    <meta charset="UTF-8">
+    <title>OMNI-ARCHITECT V1</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; font-family: 'Segoe UI', sans-serif; }
+        #canvas-layer { position: absolute; top: 0; left: 0; z-index: 1; } /* 3D World */
+        #hud-layer { position: absolute; top: 0; left: 0; z-index: 2; pointer-events: none; } /* Tech Overlay */
+        #ui-panel {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0, 20, 40, 0.8); border: 1px solid #00ffff;
+            color: #00ffff; padding: 10px 20px; border-radius: 20px;
+            font-size: 14px; z-index: 3; display: flex; gap: 20px;
+            backdrop-filter: blur(5px);
+        }
+        .mode-active { color: #fff; text-shadow: 0 0 10px #00ffff; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 </head>
-
 <body>
-<div id="hud">PINCH = BUILD • OPEN PALM = CAMERA • DROP DOWN = DELETE</div>
-<video id="video" autoplay playsinline></video>
-<canvas id="overlay"></canvas>
+    <div id="ui-panel">
+        <span id="status">SYSTEM: INITIALIZING</span>
+        <span>|</span>
+        <span id="mode-display">MODE: NAVIGATION</span>
+        <span>|</span>
+        <span id="voice-indicator">MIC: OFF</span>
+    </div>
+    <video id="input_video" style="display:none"></video>
+    <canvas id="hud-layer"></canvas>
+    <script>
+        // --- 1. THE ENGINE CORE ---
+        const CONFIG = {
+            gridSize: 1.0,
+            pinchThreshold: 0.04, // Distance for pinch
+            smoothing: 0.15,      // Lerp factor (Simulated filter)
+            maxVoxels: 5000       // InstancedMesh limit
+        };
 
-<script>
-/* ====================== OVERLAY ====================== */
-const overlay=document.getElementById("overlay");
-const ctx=overlay.getContext("2d");
-function resize(){
-  overlay.width=innerWidth;
-  overlay.height=innerHeight;
-}
-resize(); addEventListener("resize",resize);
+        // State Manager
+        const STATE = {
+            mode: 'NAV', // NAV, BUILD, ERASE
+            hand: { x: 0, y: 0, z: 0, pinching: false, gesture: 'NONE' },
+            voiceCmd: null,
+            voxels: [], // Data model
+            history: [] // Undo stack
+        };
 
-/* ====================== THREE ====================== */
-const scene=new THREE.Scene();
-scene.background=new THREE.Color(0x000000);
+        // --- 2. THREE.JS SETUP (Instanced Rendering) ---
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.02);
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 100);
+        camera.position.set(0, 5, 10);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
 
-const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,100);
-camera.position.set(0,6,14);
+        // Lighting
+        const ambient = new THREE.AmbientLight(0x404040);
+        scene.add(ambient);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
 
-const renderer=new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth,innerHeight);
-document.body.appendChild(renderer.domElement);
+        // Grid & Helper
+        const grid = new THREE.GridHelper(50, 50, 0x00ffff, 0x222222);
+        scene.add(grid);
 
-scene.add(new THREE.AmbientLight(0xffffff,.3));
-const dl=new THREE.DirectionalLight(0xffffff,1);
-dl.position.set(6,12,6);
-scene.add(dl);
-scene.add(new THREE.GridHelper(24,24));
+        // --- THE VOXEL SYSTEM (InstancedMesh) ---
+        // We use one mesh to render thousands of cubes
+        const geometry = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
+        const material = new THREE.MeshLambertMaterial({ color: 0x00ffff });
+        const voxelMesh = new THREE.InstancedMesh(geometry, material, CONFIG.maxVoxels);
+        voxelMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); // Update often
+        scene.add(voxelMesh);
 
-/* ====================== VOXELS ====================== */
-const cubeGeo=new THREE.BoxGeometry(1,1,1);
-const voxels=[];
-let active=null;
-let buildY=0;
+        const dummy = new THREE.Object3D(); // Helper for matrix math
 
-function snap(v){
-  return new THREE.Vector3(
-    Math.round(v.x),
-    Math.round(v.y),
-    Math.round(v.z)
-  );
-}
+        // GHOST CURSOR (Preview)
+        const ghostGeo = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
+        const ghostMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.5, transparent: true });
+        const ghostCursor = new THREE.Mesh(ghostGeo, ghostMat);
+        scene.add(ghostCursor);
 
-function makeCube(pos,ghost=false,color=0x00ffff){
-  const mat=new THREE.MeshStandardMaterial({
-    color,
-    wireframe:true,
-    transparent:true,
-    opacity:ghost?.35:.9
-  });
-  const m=new THREE.Mesh(cubeGeo,mat);
-  m.position.copy(pos);
-  scene.add(m);
-  return m;
-}
+        // --- 3. INPUT MANAGER (Hand + Voice) ---
+        
+        // A. Voice Recognition (Web Speech API)
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (SpeechRecognition) {
+            const recognition = new SpeechRecognition();
+            recognition.continuous = true;
+            recognition.lang = 'en-US';
+            
+            recognition.onresult = (event) => {
+                const transcript = event.results[event.results.length - 1][0].transcript.trim().toLowerCase();
+                console.log("Voice:", transcript);
+                handleVoiceCommand(transcript);
+            };
+            recognition.start();
+            document.getElementById('voice-indicator').innerText = "MIC: LISTENING";
+        }
 
-let ghost=makeCube(new THREE.Vector3(),true);
+        function handleVoiceCommand(cmd) {
+            // Natural Language mapping
+            if (cmd.includes("create") || cmd.includes("build")) setMode('BUILD');
+            if (cmd.includes("delete") || cmd.includes("erase")) setMode('ERASE');
+            if (cmd.includes("undo")) performUndo();
+            if (cmd.includes("red") || cmd.includes("blue")) changeColor(cmd);
+        }
 
-/* ====================== MEDIAPIPE ====================== */
-const video=document.getElementById("video");
+        // B. Hand Tracking (MediaPipe)
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.7, // High confidence to reduce jitter
+            minTrackingConfidence: 0.5
+        });
 
-const hands=new Hands({
-  locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
-});
+        hands.onResults(onHandResults);
 
-hands.setOptions({
-  maxNumHands:1,
-  modelComplexity:1,
-  minDetectionConfidence:.75,
-  minTrackingConfidence:.75
-});
+        // --- 4. CORE LOGIC LOOP ---
+        
+        function onHandResults(results) {
+            if (results.multiHandLandmarks.length > 0) {
+                const landmarks = results.multiHandLandmarks[0]; // Primary Hand
+                
+                // 1. Get Coordinates & Stabilize
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+                
+                // Map 2D screen to 3D Raycaster plane (Simplified projection for demo)
+                const x = (indexTip.x - 0.5) * -20; 
+                const y = (indexTip.y - 0.5) * -15; 
+                const z = 0; // Fixed depth plane for simplicity
 
-hands.onResults(onResults);
+                // Smoothing (Simple LERP)
+                STATE.hand.x += (x - STATE.hand.x) * CONFIG.smoothing;
+                STATE.hand.y += (y - STATE.hand.y) * CONFIG.smoothing;
 
-new Camera(video,{
-  onFrame:async()=>hands.send({image:video}),
-  width:640,height:480
-}).start();
+                // 2. Gesture Detection: PINCH
+                const pinchDist = Math.hypot(indexTip.x - thumbTip.x, indexTip.y - thumbTip.y);
+                const isPinching = pinchDist < CONFIG.pinchThreshold;
 
-/* ====================== GESTURES ====================== */
-let pinch=false;
-let smooth=new THREE.Vector3();
-let camRot=0;
+                // 3. Logic based on Mode
+                updateCursor(STATE.hand.x, STATE.hand.y);
 
-function dist(a,b){
-  return Math.hypot(a.x-b.x,a.y-b.y,a.z-b.z);
-}
-function isPinch(lm){return dist(lm[4],lm[8])<0.04;}
-function openPalm(lm){return dist(lm[8],lm[12])>0.12;}
+                if (isPinching && !STATE.hand.pinching) {
+                    // Pinch STARTED
+                    if (STATE.mode === 'BUILD') placeVoxel();
+                    if (STATE.mode === 'ERASE') removeVoxel();
+                }
+                STATE.hand.pinching = isPinching;
+            }
+        }
 
-function map3D(p){
-  return new THREE.Vector3(
-    (p.x-.5)*12,
-    (.5-p.y)*9,
-    -p.z*8
-  );
-}
+        // --- 5. VOXEL OPERATIONS ---
 
-/* ====================== MAIN LOOP ====================== */
-function onResults(r){
-  ctx.clearRect(0,0,overlay.width,overlay.height);
-  if(!r.multiHandLandmarks.length) return;
+        function updateCursor(x, y) {
+            // Snap to Grid
+            const snapX = Math.round(x / CONFIG.gridSize) * CONFIG.gridSize;
+            const snapY = Math.round(y / CONFIG.gridSize) * CONFIG.gridSize;
+            
+            ghostCursor.position.set(snapX, snapY, 0);
+            
+            // Visual feedback based on mode
+            if (STATE.mode === 'BUILD') ghostCursor.material.color.setHex(0x00ff00);
+            else if (STATE.mode === 'ERASE') ghostCursor.material.color.setHex(0xff0000);
+            else ghostCursor.material.color.setHex(0xffffff);
+        }
 
-  const lm=r.multiHandLandmarks[0];
+        function placeVoxel() {
+            const pos = ghostCursor.position;
+            
+            // Check for duplicates
+            const key = `${pos.x},${pos.y},${pos.z}`;
+            if (STATE.voxels.some(v => v.key === key)) return;
 
-  /* IRON MAN HAND */
-  drawConnectors(ctx,lm,HAND_CONNECTIONS,{color:"#00ffff",lineWidth:2});
-  drawLandmarks(ctx,lm,{color:"#00ffff",radius:3});
+            // Add to Data Model
+            STATE.voxels.push({ x: pos.x, y: pos.y, z: pos.z, key: key });
+            
+            // Update InstancedMesh
+            updateVoxelMesh();
+            
+            // Add to History (Undo)
+            STATE.history.push({ type: 'ADD', key: key });
+        }
 
-  const target=map3D(lm[8]);
-  smooth.lerp(target,.25);
+        function removeVoxel() {
+            // Find voxel at cursor
+            const pos = ghostCursor.position;
+            const key = `${pos.x},${pos.y},${pos.z}`;
+            const idx = STATE.voxels.findIndex(v => v.key === key);
+            
+            if (idx !== -1) {
+                STATE.voxels.splice(idx, 1);
+                updateVoxelMesh();
+                STATE.history.push({ type: 'REMOVE', data: {x: pos.x, y: pos.y, z: pos.z, key: key} });
+            }
+        }
 
-  ghost.position.copy(snap(smooth));
+        function updateVoxelMesh() {
+            // Re-draw all instances
+            STATE.voxels.forEach((v, i) => {
+                dummy.position.set(v.x, v.y, v.z);
+                dummy.updateMatrix();
+                voxelMesh.setMatrixAt(i, dummy.matrix);
+            });
+            // Hide unused instances
+            for (let i = STATE.voxels.length; i < CONFIG.maxVoxels; i++) {
+                dummy.position.set(0, 0, 10000);
+                dummy.updateMatrix();
+                voxelMesh.setMatrixAt(i, dummy.matrix);
+            }
+            voxelMesh.instanceMatrix.needsUpdate = true;
+            voxelMesh.count = STATE.voxels.length;
+        }
 
-  /* CAMERA MODE */
-  if(openPalm(lm)){
-    camRot+=(lm[0].x-.5)*.04;
-    camera.position.x=Math.sin(camRot)*14;
-    camera.position.z=Math.cos(camRot)*14;
-    camera.lookAt(0,0,0);
-    return;
-  }
+        function performUndo() {
+            if (STATE.history.length === 0) return;
+            const action = STATE.history.pop();
+            
+            if (action.type === 'ADD') {
+                // Reverse ADD = Remove
+                const idx = STATE.voxels.findIndex(v => v.key === action.key);
+                if (idx !== -1) STATE.voxels.splice(idx, 1);
+            } else if (action.type === 'REMOVE') {
+                // Reverse REMOVE = Add
+                STATE.voxels.push(action.data);
+            }
+            updateVoxelMesh();
+            console.log("Undo performed");
+        }
 
-  /* BUILD MODE */
-  if(isPinch(lm)&&!pinch){
-    pinch=true;
-    active=makeCube(
-      new THREE.Vector3(
-        ghost.position.x,
-        buildY,
-        ghost.position.z
-      )
-    );
-    voxels.push(active);
-    buildY++;
-  }
+        function setMode(newMode) {
+            STATE.mode = newMode;
+            document.getElementById('mode-display').innerText = "MODE: " + newMode;
+        }
 
-  if(!isPinch(lm)&&pinch){
-    pinch=false;
-    if(active.position.y<-1){
-      scene.remove(active);
-    }
-    active=null;
-  }
-}
+        // --- 6. RENDER LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            ghostCursor.rotation.y += 0.02; // Idle animation
+            renderer.render(scene, camera);
+        }
+        animate();
 
-/* ====================== RENDER ====================== */
-function animate(){
-  requestAnimationFrame(animate);
-  renderer.render(scene,camera);
-}
-animate();
-</script>
+        // --- 7. INITIALIZATION ---
+        const videoElement = document.getElementById('input_video');
+        const cam = new Camera(videoElement, {
+            onFrame: async () => { await hands.send({image: videoElement}); },
+            width: 1280, height: 720
+        });
+        cam.start();
+        document.getElementById('status').innerText = "SYSTEM: READY";
+    </script>
 </body>
 </html>
