@@ -1,404 +1,134 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>JARVIS MK.XI ULTIMATE</title>
-    <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: 'Courier New', monospace; }
+<meta charset="utf-8">
+<title>Iron Hand HUD</title>
 
-        /* VIDEO BACKGROUND */
-        #input_video { 
-            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
-            object-fit: cover; transform: scaleX(-1); opacity: 0.2; z-index: 0;
-            filter: grayscale(100%) contrast(1.2); /* Sci-Fi Look */
-        }
-        
-        /* 2D HUD LAYER */
-        #output_canvas {
-            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-            transform: scaleX(-1); z-index: 2; pointer-events: none;
-        }
-        
-        /* 3D WORLD LAYER */
-        #three_canvas { 
-            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; 
-            z-index: 1; pointer-events: none;
-        }
+<style>
+html,body{
+  margin:0;
+  background:#000;
+  overflow:hidden;
+}
+video,canvas{
+  position:absolute;
+  top:0;left:0;
+}
+#hudText{
+  position:absolute;
+  top:40px;
+  width:100%;
+  text-align:center;
+  color:white;
+  font-size:42px;
+  font-weight:800;
+  letter-spacing:1px;
+}
+#git{
+  position:absolute;
+  bottom:80px;
+  width:100%;
+  text-align:center;
+  color:white;
+  font-size:26px;
+  opacity:.9;
+}
+</style>
 
-        /* START SCREEN */
-        #start-screen {
-            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: #000; z-index: 100; display: flex; flex-direction: column;
-            align-items: center; justify-content: center;
-        }
-        #start-btn {
-            padding: 15px 50px; border: 1px solid #00ffff; background: rgba(0,255,255,0.05);
-            color: #00ffff; font-size: 24px; font-family: 'Courier New'; cursor: pointer;
-            text-transform: uppercase; letter-spacing: 5px; box-shadow: 0 0 30px #00ffff;
-            transition: all 0.3s;
-        }
-        #start-btn:hover { background: #00ffff; color: #000; box-shadow: 0 0 60px #00ffff; }
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-        /* HUD ELEMENTS */
-        #hud-top {
-            position: absolute; top: 20px; left: 20px; z-index: 10;
-            color: #00ffff; font-weight: bold; pointer-events: none; display: none;
-            text-shadow: 0 0 10px #00ffff; border-left: 4px solid #00ffff; padding-left: 10px;
-        }
-        .hud-line { height: 1px; background: #00ffff; width: 200px; margin-top: 5px; opacity: 0.5; }
-    </style>
-
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <div id="start-screen">
-        <h1 style="color:white; font-size: 12px; letter-spacing: 2px; margin-bottom: 30px; opacity: 0.7;">STARK INDUSTRIES PROTOTYPE // MK.XI</h1>
-        <button id="start-btn" onclick="startSystem()">INITIALIZE</button>
-    </div>
+<div id="hudText">Ironman who? 🚀</div>
+<div id="git">( Comment Git )</div>
 
-    <div id="hud-top">
-        SYSTEM: <span style="color:#0f0">ONLINE</span><br>
-        VOXELS: <span id="count">0</span> / 2000<br>
-        <div class="hud-line"></div>
-        <div style="font-size:10px; color:#aaa; margin-top:5px; line-height: 1.5;">
-        [R] PINCH & HOLD: CONSTRUCT<br>
-        [L] FIST & DRAG: ROTATE WORLD<br>
-        [L] PINCH: DISINTEGRATE<br>
-        [L] PALM HOLD: SYSTEM RESET
-        </div>
-    </div>
+<video id="video" autoplay muted playsinline></video>
+<canvas id="canvas"></canvas>
 
-    <video id="input_video" playsinline></video>
-    <canvas id="output_canvas"></canvas>
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 
-    <script>
-        // --- CONFIGURATION ---
-        const CONFIG = {
-            gridSize: 0.8,
-            smoothing: 0.12, // Smooth robotic feel
-            pinchThreshold: 0.05,
-            buildTime: 15, // Frames to hold pinch before building (approx 0.4s)
-            resetTime: 60, // Frames to hold reset (approx 2s)
-            maxBlocks: 2000
-        };
+canvas.width = innerWidth;
+canvas.height = innerHeight;
 
-        // --- THREE.JS SETUP ---
-        const scene = new THREE.Scene();
-        // Fog for depth
-        scene.fog = new THREE.FogExp2(0x000000, 0.02);
+const hands = new Hands({
+  locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`
+});
 
-        const world = new THREE.Group(); 
-        scene.add(world);
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.7
+});
 
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-        camera.position.z = 16;
-        camera.position.y = 0;
+hands.onResults(onResults);
 
-        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.domElement.id = "three_canvas";
-        document.body.appendChild(renderer.domElement);
+new Camera(video,{
+  onFrame: async()=>hands.send({image:video}),
+  width:640,
+  height:480
+}).start();
 
-        // --- LIGHTING (The "Free Hand" Upgrade) ---
-        // Ambient glow
-        const ambientLight = new THREE.AmbientLight(0x404040, 2); 
-        scene.add(ambientLight);
+/* ---------------- CORE DATA ---------------- */
 
-        // Dynamic Hand Light (Follows Right Hand)
-        const handLight = new THREE.PointLight(0x00ffff, 2, 20);
-        scene.add(handLight);
+let voxels = [];
+let lastPinch = false;
 
-        // --- MATERIALS & OBJECTS ---
-        const geometry = new THREE.BoxGeometry(CONFIG.gridSize, CONFIG.gridSize, CONFIG.gridSize);
-        
-        // Solid Block Material (Glowing)
-        const blockMat = new THREE.MeshPhongMaterial({ 
-            color: 0x00ffff, 
-            transparent: true, 
-            opacity: 0.9, 
-            emissive: 0x004444,
-            shininess: 100
-        });
+function drawVoxel(x,y){
+  ctx.strokeStyle="#00f0ff";
+  ctx.lineWidth=2;
+  ctx.strokeRect(x-12,y-12,24,24);
+}
 
-        // Wireframe Overlay
-        const wireMat = new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, opacity: 0.3, transparent: true });
+/* ---------------- GESTURES ---------------- */
 
-        // Instanced Meshes
-        const meshSolid = new THREE.InstancedMesh(geometry, blockMat, CONFIG.maxBlocks);
-        const meshWire = new THREE.InstancedMesh(geometry, wireMat, CONFIG.maxBlocks);
-        world.add(meshSolid);
-        world.add(meshWire);
+function dist(a,b){
+  return Math.hypot(a.x-b.x,a.y-b.y);
+}
 
-        // Ghost Cursor (Wireframe)
-        const cursor = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0x00ffff, wireframe: true, opacity: 0.4, transparent: true }));
-        scene.add(cursor);
+function onResults(res){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.drawImage(video,0,0,canvas.width,canvas.height);
 
-        // Eraser Cursor (Red Box)
-        const eraser = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true, opacity: 0.8, transparent: true }));
-        scene.add(eraser);
-        eraser.visible = false;
+  if(!res.multiHandLandmarks.length) return;
+  const lm = res.multiHandLandmarks[0];
 
-        // Grid Floor (Visual Reference)
-        const gridHelper = new THREE.GridHelper(50, 50, 0x004444, 0x001111);
-        gridHelper.rotation.x = Math.PI / 2;
-        gridHelper.position.z = -5;
-        world.add(gridHelper);
+  /* Draw skeleton */
+  ctx.strokeStyle="#00f0ff";
+  ctx.lineWidth=2;
+  for(let i=0;i<lm.length;i++){
+    const x=lm[i].x*canvas.width;
+    const y=lm[i].y*canvas.height;
+    ctx.beginPath();
+    ctx.arc(x,y,3,0,Math.PI*2);
+    ctx.fillStyle="#00f0ff";
+    ctx.fill();
+  }
 
-        // --- DATA STRUCTURES ---
-        const dummy = new THREE.Object3D();
-        const voxelMap = new Map();
-        let voxelCount = 0;
-        
-        function clearWorld() {
-            for(let i=0; i<CONFIG.maxBlocks; i++){
-                dummy.position.set(0,0,1000); dummy.updateMatrix();
-                meshSolid.setMatrixAt(i, dummy.matrix);
-                meshWire.setMatrixAt(i, dummy.matrix);
-            }
-            meshSolid.instanceMatrix.needsUpdate = true;
-            meshWire.instanceMatrix.needsUpdate = true;
-            voxelMap.clear();
-            voxelCount = 0;
-            world.rotation.set(0,0,0);
-            document.getElementById('count').innerText = 0;
-        }
-        clearWorld();
+  /* Pinch detect */
+  const pinch = dist(lm[4],lm[8]) < 0.035;
+  const px = lm[8].x*canvas.width;
+  const py = lm[8].y*canvas.height;
 
-        // --- VARIABLES ---
-        let smoothHand = {x:0, y:0};
-        let lastLeftHand = {x:0, y:0};
-        let isRotating = false;
+  if(pinch && !lastPinch){
+    voxels.push({x:px,y:py});
+  }
+  lastPinch = pinch;
 
-        // Timers for "Hold" Actions
-        let buildTimer = 0;
-        let resetTimer = 0;
-        let hasBuilt = false; // Prevent rapid-fire building
+  /* Draw voxel stack */
+  for(let i=0;i<voxels.length;i++){
+    drawVoxel(px, py - i*26);
+  }
 
-        function lerp(start, end, amt) { return (1-amt)*start + amt*end; }
+  /* Ghost preview */
+  drawVoxel(px,py);
+}
+</script>
 
-        // --- 2D CANVAS (HUD & Tech Lines) ---
-        const canvas2D = document.getElementById('output_canvas');
-        const ctx2D = canvas2D.getContext('2d');
-        canvas2D.width = window.innerWidth;
-        canvas2D.height = window.innerHeight;
-
-        function drawHUDCircle(x, y, progress, color) {
-            ctx2D.beginPath();
-            ctx2D.arc(x, y, 25, 0, Math.PI * 2);
-            ctx2D.lineWidth = 3;
-            ctx2D.strokeStyle = "rgba(255,255,255,0.1)";
-            ctx2D.stroke();
-
-            ctx2D.beginPath();
-            ctx2D.arc(x, y, 25, -Math.PI/2, (-Math.PI/2) + (Math.PI * 2 * progress));
-            ctx2D.lineWidth = 4;
-            ctx2D.strokeStyle = color;
-            ctx2D.shadowBlur = 10;
-            ctx2D.shadowColor = color;
-            ctx2D.stroke();
-            ctx2D.shadowBlur = 0;
-        }
-
-        // --- HAND TRACKING LOGIC ---
-        function onResults(results) {
-            // 1. CLEAR & DRAW SKELETON
-            ctx2D.clearRect(0, 0, canvas2D.width, canvas2D.height);
-            if (results.multiHandLandmarks) {
-                for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(ctx2D, landmarks, HAND_CONNECTIONS, {color: '#00ffff', lineWidth: 1});
-                    drawLandmarks(ctx2D, landmarks, {color: '#ffffff', lineWidth: 1, radius: 2});
-                }
-            }
-
-            cursor.visible = false;
-            eraser.visible = false;
-
-            if (results.multiHandLandmarks.length > 0) {
-                results.multiHandLandmarks.forEach((landmarks, index) => {
-                    const label = results.multiHandedness[index].label;
-
-                    // ==========================================
-                    // RIGHT HAND (BUILDER) -> Label "Left"
-                    // ==========================================
-                    if (label === "Left") {
-                        const tip = landmarks[8];
-                        const thumb = landmarks[4];
-                        const pinch = Math.hypot(tip.x - thumb.x, tip.y - thumb.y) < CONFIG.pinchThreshold;
-
-                        // 3D Mapping
-                        const x = (1 - tip.x) * 24 - 12;
-                        const y = (1 - tip.y) * 18 - 9;
-                        const screenX = (1 - tip.x) * canvas2D.width;
-                        const screenY = tip.y * canvas2D.height;
-                        
-                        // Stabilization
-                        smoothHand.x = lerp(smoothHand.x, x, CONFIG.smoothing);
-                        smoothHand.y = lerp(smoothHand.y, y, CONFIG.smoothing);
-
-                        // Move Light & Cursor
-                        handLight.position.set(smoothHand.x, smoothHand.y, 2);
-                        cursor.visible = true;
-                        cursor.position.set(smoothHand.x, smoothHand.y, 0);
-
-                        // ACTION: BUILD
-                        if (pinch) {
-                            if (!hasBuilt) {
-                                buildTimer++;
-                                const progress = Math.min(buildTimer / CONFIG.buildTime, 1);
-                                drawHUDCircle(screenX, screenY, progress, "#00ffff");
-
-                                if (buildTimer >= CONFIG.buildTime) {
-                                    // *** LOCK & BUILD ***
-                                    const sx = Math.round(smoothHand.x / CONFIG.gridSize) * CONFIG.gridSize;
-                                    const sy = Math.round(smoothHand.y / CONFIG.gridSize) * CONFIG.gridSize;
-                                    const key = `${sx},${sy}`;
-
-                                    if (!voxelMap.has(key) && voxelCount < CONFIG.maxBlocks) {
-                                        dummy.position.set(sx, sy, 0);
-                                        dummy.updateMatrix();
-                                        meshSolid.setMatrixAt(voxelCount, dummy.matrix);
-                                        meshWire.setMatrixAt(voxelCount, dummy.matrix);
-                                        meshSolid.instanceMatrix.needsUpdate = true;
-                                        meshWire.instanceMatrix.needsUpdate = true;
-                                        
-                                        voxelMap.set(key, voxelCount);
-                                        voxelCount++;
-                                        document.getElementById('count').innerText = voxelCount;
-                                        
-                                        // Visual Flash
-                                        cursor.scale.set(1.5, 1.5, 1.5); 
-                                        setTimeout(() => cursor.scale.set(1,1,1), 100);
-                                        hasBuilt = true; // Lock until release
-                                    }
-                                }
-                            } else {
-                                // Already built, waiting for release
-                                drawHUDCircle(screenX, screenY, 1, "#00ff00"); // Green "Done" Circle
-                            }
-                        } else {
-                            // Reset Build State
-                            buildTimer = 0;
-                            hasBuilt = false;
-                        }
-                    }
-
-                    // ==========================================
-                    // LEFT HAND (CONTROLLER) -> Label "Right"
-                    // ==========================================
-                    if (label === "Right") {
-                        const tip = landmarks[8];
-                        const thumb = landmarks[4];
-                        const pinch = Math.hypot(tip.x - thumb.x, tip.y - thumb.y) < CONFIG.pinchThreshold;
-                        
-                        // Fist Check (Fingers curled)
-                        const isFist = landmarks[12].y > landmarks[9].y && landmarks[16].y > landmarks[13].y;
-                        
-                        // Open Palm (Fingers Up)
-                        const isPalm = !isFist && !pinch;
-
-                        const screenX = (1 - tip.x) * canvas2D.width;
-                        const screenY = tip.y * canvas2D.height;
-
-                        // ACTION 1: ROTATE (FIST + DRAG)
-                        if (isFist) {
-                            const currX = landmarks[9].x; // Middle knuckle
-                            const currY = landmarks[9].y;
-
-                            if (isRotating) {
-                                const dx = currX - lastLeftHand.x;
-                                const dy = currY - lastLeftHand.y;
-                                world.rotation.y += dx * 4; // Horizontal Spin
-                                world.rotation.x += dy * 4; // Vertical Tilt
-                            }
-                            
-                            lastLeftHand = {x: currX, y: currY};
-                            isRotating = true;
-                            
-                            // Visual: Green Lock Icon
-                            drawHUDCircle(screenX, screenY, 1, "#00ff00");
-                        } else {
-                            isRotating = false;
-                        }
-
-                        // ACTION 2: RESET (PALM HOLD)
-                        if (isPalm) {
-                            // Are we holding still?
-                            resetTimer++;
-                            const progress = Math.min(resetTimer / CONFIG.resetTime, 1);
-                            if (resetTimer > 10) { // Slight delay to prevent instant trigger
-                                drawHUDCircle(screenX, screenY, progress, "#ff0000");
-                            }
-
-                            if (resetTimer >= CONFIG.resetTime) {
-                                clearWorld();
-                                resetTimer = 0;
-                            }
-                        } else {
-                            resetTimer = 0;
-                        }
-
-                        // ACTION 3: ERASE (PINCH)
-                        if (pinch) {
-                            eraser.visible = true;
-                            const ex = (1 - tip.x) * 24 - 12;
-                            const ey = (1 - tip.y) * 18 - 9;
-                            eraser.position.set(ex, ey, 0);
-                            drawHUDCircle(screenX, screenY, 1, "#ff0055"); // Pink Eraser Circle
-
-                            const sx = Math.round(ex / CONFIG.gridSize) * CONFIG.gridSize;
-                            const sy = Math.round(ey / CONFIG.gridSize) * CONFIG.gridSize;
-                            const key = `${sx},${sy}`;
-                            
-                            if(voxelMap.has(key)) {
-                                const idx = voxelMap.get(key);
-                                dummy.position.set(0,0,1000); dummy.updateMatrix();
-                                meshSolid.setMatrixAt(idx, dummy.matrix);
-                                meshWire.setMatrixAt(idx, dummy.matrix);
-                                meshSolid.instanceMatrix.needsUpdate = true;
-                                meshWire.instanceMatrix.needsUpdate = true;
-                                voxelMap.delete(key);
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        // --- ANIMATION LOOP ---
-        function animate() {
-            requestAnimationFrame(animate);
-            renderer.render(scene, camera);
-        }
-        animate();
-
-        // --- STARTUP ---
-        function startSystem() {
-            document.getElementById('start-screen').style.display = 'none';
-            document.getElementById('hud-top').style.display = 'block';
-
-            const videoElement = document.getElementById('input_video');
-            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-            
-            hands.setOptions({ 
-                maxNumHands: 2, 
-                modelComplexity: 1, 
-                minDetectionConfidence: 0.5, 
-                minTrackingConfidence: 0.5 
-            });
-            hands.onResults(onResults);
-
-            const cam = new Camera(videoElement, {
-                onFrame: async () => { await hands.send({image: videoElement}); },
-                width: 1280, height: 720
-            });
-            cam.start();
-        }
-    </script>
 </body>
 </html>
